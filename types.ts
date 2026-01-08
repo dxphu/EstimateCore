@@ -87,6 +87,8 @@ export interface LaborItem {
 export interface Project {
   id: string;
   name: string;
+  startDate?: string;
+  endDate?: string;
   servers: ServerItem[];
   labors: LaborItem[];
   infraPrices: UnitPrices;

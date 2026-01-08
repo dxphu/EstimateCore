@@ -1,6 +1,14 @@
-import { createClient } from '@supabase/supabase-js';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import * as XLSX from 'xlsx';
 import { ParsedConfig, ServerItem, UnitPrices, CalculationResult, LaborItem, LaborPrices, Project, Role } from './types';
+
+// ========================================================
+// CẤU HÌNH SUPABASE TRỰC TIẾP TẠI ĐÂY
+// Lấy tại: Supabase Dashboard > Settings > API
+// ========================================================
+const HARDCODED_URL = 'https://pggapuatkhocxihyuprx.supabase.co'; // Dán Project URL vào đây (ví dụ: https://xyz.supabase.co)
+const HARDCODED_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBnZ2FwdWF0a2hvY3hpaHl1cHJ4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc4Mzg1ODYsImV4cCI6MjA4MzQxNDU4Nn0.I53sjZUgiS0ndCTii7_yVRLv5tAeCSCJKGrIwTfLn3k'; // Dán Anon Key vào đây (chuỗi rất dài)
+// ========================================================
 
 const getEnv = (key: string): string => {
   try {
@@ -10,19 +18,57 @@ const getEnv = (key: string): string => {
   }
 };
 
-const supabaseUrl = getEnv('SUPABASE_URL');
-const supabaseKey = getEnv('SUPABASE_ANON_KEY');
+const CLOUD_CONFIG_KEY = 'estimacore_cloud_config';
 
-export const supabase = (supabaseUrl && supabaseKey) ? createClient(supabaseUrl, supabaseKey) : null;
+export interface CloudConfig {
+  url: string;
+  key: string;
+}
+
+export const getCloudConfig = (): CloudConfig => {
+  // Nếu đã dán trong code, ưu tiên dùng luôn
+  if (HARDCODED_URL && HARDCODED_KEY) {
+    return { url: HARDCODED_URL, key: HARDCODED_KEY };
+  }
+  
+  const saved = localStorage.getItem(CLOUD_CONFIG_KEY);
+  if (saved) return JSON.parse(saved);
+  
+  return {
+    url: getEnv('SUPABASE_URL'),
+    key: getEnv('SUPABASE_ANON_KEY')
+  };
+};
+
+export const saveCloudConfig = (config: CloudConfig) => {
+  localStorage.setItem(CLOUD_CONFIG_KEY, JSON.stringify(config));
+};
+
+let supabaseInstance: SupabaseClient | null = null;
+
+export const getSupabase = (): SupabaseClient | null => {
+  if (supabaseInstance) return supabaseInstance;
+  const config = getCloudConfig();
+  if (config.url && config.key) {
+    supabaseInstance = createClient(config.url, config.key);
+    return supabaseInstance;
+  }
+  return null;
+};
+
+export const resetSupabaseInstance = () => {
+  supabaseInstance = null;
+};
 
 export const checkSupabaseConnection = async (): Promise<{ success: boolean; message: string }> => {
-  if (!supabase) return { success: false, message: "Chưa cấu hình Supabase URL/Key trong biến môi trường." };
+  const client = getSupabase();
+  if (!client) return { success: false, message: "Chưa cấu hình Supabase URL/Key." };
   try {
-    const { data, error } = await supabase.from('projects').select('count', { count: 'exact', head: true });
+    const { data, error } = await client.from('projects').select('count', { count: 'exact', head: true });
     if (error) throw error;
-    return { success: true, message: "Kết nối Database thành công!" };
+    return { success: true, message: "Kết nối Cloud Database thành công!" };
   } catch (err: any) {
-    return { success: false, message: `Lỗi kết nối: ${err.message || 'Không xác định'}` };
+    return { success: false, message: `Lỗi kết nối: ${err.message || 'Không xác định. Hãy kiểm tra lại URL/Key hoặc bảng projects.'}` };
   }
 };
 
@@ -109,9 +155,10 @@ export const saveProjectToCloud = async (project: Project) => {
   else localProjects.push(project);
   localStorage.setItem(PROJECTS_KEY, JSON.stringify(localProjects));
 
-  if (supabase) {
+  const client = getSupabase();
+  if (client) {
     try {
-      const { error } = await supabase.from('projects').upsert({
+      const { error } = await client.from('projects').upsert({
         id: project.id,
         name: project.name,
         servers: project.servers,
@@ -130,10 +177,11 @@ export const saveProjectToCloud = async (project: Project) => {
 };
 
 export const fetchProjectsFromCloud = async (): Promise<Project[]> => {
-  if (!supabase) return loadProjectsFromLocal();
+  const client = getSupabase();
+  if (!client) return loadProjectsFromLocal();
 
   try {
-    const { data, error } = await supabase
+    const { data, error } = await client
       .from('projects')
       .select('*')
       .order('last_modified', { ascending: false });
@@ -159,9 +207,10 @@ export const deleteProjectFromCloud = async (id: string) => {
   const localProjects = loadProjectsFromLocal().filter(p => p.id !== id);
   localStorage.setItem(PROJECTS_KEY, JSON.stringify(localProjects));
 
-  if (supabase) {
+  const client = getSupabase();
+  if (client) {
     try {
-      await supabase.from('projects').delete().eq('id', id);
+      await client.from('projects').delete().eq('id', id);
     } catch (e) {}
   }
 };
@@ -169,7 +218,6 @@ export const deleteProjectFromCloud = async (id: string) => {
 export const exportProjectToExcel = (project: Project) => {
   const workbook = XLSX.utils.book_new();
 
-  // Sheet 1: Servers
   const serverData = project.servers.map(s => {
     const cost = calculateItemCost(s, project.infraPrices);
     return {
@@ -188,7 +236,6 @@ export const exportProjectToExcel = (project: Project) => {
   const serverSheet = XLSX.utils.json_to_sheet(serverData);
   XLSX.utils.book_append_sheet(workbook, serverSheet, 'Hạ tầng Cloud');
 
-  // Sheet 2: Labors
   const laborData = project.labors.map(l => ({
     'Đầu việc': l.taskName,
     'Vai trò': l.role,
@@ -199,7 +246,6 @@ export const exportProjectToExcel = (project: Project) => {
   const laborSheet = XLSX.utils.json_to_sheet(laborData);
   XLSX.utils.book_append_sheet(workbook, laborSheet, 'Nghiệp vụ');
 
-  // Write and Save
   XLSX.writeFile(workbook, `${project.name.replace(/\s+/g, '_')}_Cost_Estimator.xlsx`);
 };
 

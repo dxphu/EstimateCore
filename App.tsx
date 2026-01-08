@@ -1,8 +1,9 @@
+
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import * as XLSX from 'xlsx';
 import { ServerItem, LaborItem, Category, Role, Project } from './types';
 import { INITIAL_SERVERS, INITIAL_LABOR_ITEMS, INITIAL_UNIT_PRICES, INITIAL_LABOR_PRICES } from './constants';
-import { calculateItemCost, calculateLaborCost, formatCurrency, saveProjectToCloud, fetchProjectsFromCloud, deleteProjectFromCloud, checkSupabaseConnection, generateDeploymentScript, exportProjectToExcel, mapStringToRole, downloadImportTemplate } from './utils';
+import { calculateItemCost, calculateLaborCost, formatCurrency, saveProjectToCloud, fetchProjectsFromCloud, deleteProjectFromCloud, checkSupabaseConnection, generateDeploymentScript, exportProjectToExcel, mapStringToRole, downloadImportTemplate, getCloudConfig, saveCloudConfig, resetSupabaseInstance } from './utils';
 import { analyzeArchitecture, predictTaskMandays } from './geminiService';
 
 type Tab = 'overview' | 'mandays' | 'infra' | 'settings';
@@ -54,6 +55,9 @@ const App: React.FC = () => {
   const [dbStatus, setDbStatus] = useState<{ status: 'idle' | 'loading' | 'success' | 'error', message: string }>({ status: 'idle', message: '' });
   const [showScriptModal, setShowScriptModal] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Cấu hình Cloud mới
+  const [cloudConfig, setCloudConfig] = useState(getCloudConfig());
 
   useEffect(() => {
     const init = async () => {
@@ -107,10 +111,17 @@ const App: React.FC = () => {
       setIsDirty(false);
       alert("Đã lưu dự án thành công!");
     } catch (e) {
-      alert("Lỗi khi lưu dữ liệu lên Cloud.");
+      alert("Lỗi khi lưu dữ liệu lên Cloud. Hãy kiểm tra lại kết nối Supabase.");
     } finally {
       setIsSyncing(false);
     }
+  };
+
+  const handleSaveCloudConfig = () => {
+    saveCloudConfig(cloudConfig);
+    resetSupabaseInstance();
+    alert("Đã lưu cấu hình Cloud thành công!");
+    handleCheckDb(); // Tự động kiểm tra lại kết nối
   };
 
   const handleCheckDb = async () => {
@@ -257,7 +268,7 @@ const App: React.FC = () => {
     }
   };
 
-  if (isLoading) return <div className="min-h-screen bg-[#0F172A] flex items-center justify-center text-white font-black">KHỞI TẠO HỆ THỐNG...</div>;
+  if (isLoading) return <div className="min-h-screen bg-[#0F172A] flex items-center justify-center text-white font-black tracking-widest">KHỞI TẠO HỆ THỐNG...</div>;
   if (!currentProject) return <div className="min-h-screen flex items-center justify-center">Không tìm thấy dự án</div>;
 
   return (
@@ -280,12 +291,12 @@ const App: React.FC = () => {
           <div className="max-h-48 overflow-y-auto mb-4 space-y-1">
             {projects.map(p => (
               <div key={p.id} className="relative group">
-                <button onClick={() => setCurrentProjectId(p.id)} className={`w-full text-left px-3 py-2 rounded-lg text-xs truncate pr-8 ${currentProjectId === p.id ? 'bg-indigo-600' : 'text-slate-400'}`}>{String(p.name)}</button>
+                <button onClick={() => setCurrentProjectId(p.id)} className={`w-full text-left px-3 py-2 rounded-lg text-xs truncate pr-8 ${currentProjectId === p.id ? 'bg-indigo-600 font-bold' : 'text-slate-400'}`}>{String(p.name)}</button>
                 <button onClick={(e) => handleDeleteProject(p.id, e)} className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 text-red-400 p-1">×</button>
               </div>
             ))}
           </div>
-          <button onClick={handleCreateNewProject} className="w-full py-2 bg-slate-800 border border-white/10 rounded-lg text-xs font-bold">+ Tạo dự án mới</button>
+          <button onClick={handleCreateNewProject} className="w-full py-2 bg-slate-800 border border-white/10 rounded-lg text-xs font-bold transition-colors hover:bg-slate-700">+ Tạo dự án mới</button>
         </div>
       </aside>
 
@@ -440,7 +451,7 @@ const App: React.FC = () => {
             <div className="space-y-8">
               <div className="flex justify-between items-center">
                 <h3 className="font-black text-xl">Hạ tầng Server</h3>
-                <button onClick={() => updateProject({ servers: [...currentProject.servers, { id: 's'+Date.now(), category: Category.AppServer, os: 'Linux', configRaw: '4 core 8GB storage: 100GB', quantity: 1, content: 'Server mới', note: '', storageType: 'diskSanAllFlash', bwQt: 0, bwInternal: 0 }] })} className="bg-indigo-600 text-white px-6 py-2 rounded-xl text-xs font-bold">+ Thêm Server</button>
+                <button onClick={() => updateProject({ servers: [...currentProject.servers, { id: 's'+Date.now(), category: Category.AppServer, os: 'Linux', configRaw: '4 core 8GB storage: 100GB', quantity: 1, content: 'Server mới', note: '', storageType: 'diskSanAllFlash', bwQt: 0, bwInternal: 0 }] })} className="bg-indigo-600 text-white px-6 py-2 rounded-xl text-xs font-bold transition-all hover:bg-indigo-700 shadow-lg">+ Thêm Server</button>
               </div>
               <div className="bg-white rounded-3xl border border-slate-200 shadow-xl overflow-hidden">
                 <table className="w-full text-left">
@@ -452,11 +463,11 @@ const App: React.FC = () => {
                       const cost = calculateItemCost(s, currentProject.infraPrices);
                       return (
                         <tr key={s.id} className="border-b border-slate-50 group hover:bg-slate-50">
-                          <td className="px-6 py-4 font-bold"><input className="bg-transparent w-full" value={s.content} onChange={(e) => updateProject({ servers: currentProject.servers.map(item => item.id === s.id ? {...item, content: e.target.value} : item)})} /></td>
-                          <td className="px-6 py-4"><input className="w-full bg-slate-100 p-2 rounded-lg text-xs" value={s.configRaw} onChange={(e) => updateProject({ servers: currentProject.servers.map(item => item.id === s.id ? {...item, configRaw: e.target.value} : item)})} /></td>
-                          <td className="px-6 py-4 text-center"><input type="number" className="w-12 text-center bg-slate-100 rounded-lg py-1 text-xs" value={s.quantity} onChange={(e) => updateProject({ servers: currentProject.servers.map(item => item.id === s.id ? {...item, quantity: parseInt(e.target.value) || 1} : item)})} /></td>
+                          <td className="px-6 py-4 font-bold"><input className="bg-transparent w-full outline-none" value={s.content} onChange={(e) => updateProject({ servers: currentProject.servers.map(item => item.id === s.id ? {...item, content: e.target.value} : item)})} /></td>
+                          <td className="px-6 py-4"><input className="w-full bg-slate-100 p-2 rounded-lg text-xs outline-none focus:ring-1 focus:ring-indigo-300" value={s.configRaw} onChange={(e) => updateProject({ servers: currentProject.servers.map(item => item.id === s.id ? {...item, configRaw: e.target.value} : item)})} /></td>
+                          <td className="px-6 py-4 text-center"><input type="number" className="w-12 text-center bg-slate-100 rounded-lg py-1 text-xs outline-none" value={s.quantity} onChange={(e) => updateProject({ servers: currentProject.servers.map(item => item.id === s.id ? {...item, quantity: parseInt(e.target.value) || 1} : item)})} /></td>
                           <td className="px-6 py-4 text-right font-black text-indigo-600">{formatCurrency(cost.totalPrice)}</td>
-                          <td className="px-6 py-4"><button onClick={() => updateProject({ servers: currentProject.servers.filter(item => item.id !== s.id)})} className="text-red-400 opacity-0 group-hover:opacity-100 font-bold">×</button></td>
+                          <td className="px-6 py-4"><button onClick={() => updateProject({ servers: currentProject.servers.filter(item => item.id !== s.id)})} className="text-red-400 opacity-0 group-hover:opacity-100 font-bold hover:scale-125 transition-all">×</button></td>
                         </tr>
                       );
                     })}
@@ -467,30 +478,76 @@ const App: React.FC = () => {
           )}
 
           {activeTab === 'settings' && (
-            <div className="space-y-8">
+            <div className="space-y-8 pb-10">
+              {/* Cloud Configuration Section */}
+              <div className="bg-indigo-900 text-white p-10 rounded-[40px] shadow-2xl relative overflow-hidden">
+                <div className="absolute top-0 right-0 w-64 h-64 bg-white/5 rounded-full -mr-32 -mt-32 blur-3xl"></div>
+                <div className="relative z-10">
+                   <div className="flex justify-between items-start mb-8">
+                      <div>
+                        <h3 className="text-2xl font-black">Cấu hình Cloud Sync</h3>
+                        <p className="text-indigo-300 text-xs mt-1">Kết nối dự án tới Supabase của bạn.</p>
+                      </div>
+                      <div className="flex flex-col items-end gap-2">
+                        <button 
+                            onClick={handleCheckDb} 
+                            className="px-4 py-2 bg-white/10 hover:bg-white/20 border border-white/20 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all"
+                        >
+                            Kiểm tra kết nối
+                        </button>
+                        {dbStatus.status !== 'idle' && (
+                            <div className={`text-[10px] font-bold ${dbStatus.status === 'error' ? 'text-red-300' : 'text-emerald-300'}`}>
+                              {String(dbStatus.message || '')}
+                            </div>
+                        )}
+                      </div>
+                   </div>
+                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <div className="space-y-2">
+                        <label className="text-[10px] font-black uppercase opacity-60">Supabase Project URL</label>
+                        <input 
+                          type="text" 
+                          value={cloudConfig.url} 
+                          onChange={(e) => setCloudConfig({...cloudConfig, url: e.target.value})}
+                          placeholder="https://xxx.supabase.co"
+                          className="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-sm outline-none focus:bg-white/20 transition-all placeholder:text-white/20"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-[10px] font-black uppercase opacity-60">Supabase Anon Key</label>
+                        <input 
+                          type="password" 
+                          value={cloudConfig.key} 
+                          onChange={(e) => setCloudConfig({...cloudConfig, key: e.target.value})}
+                          placeholder="eyJhbG..."
+                          className="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-sm outline-none focus:bg-white/20 transition-all placeholder:text-white/20"
+                        />
+                      </div>
+                   </div>
+                   <div className="mt-8 flex items-center justify-between">
+                      <p className="text-[10px] text-indigo-400 font-medium max-w-md italic">
+                        * Bạn có thể lấy các thông tin này tại: Project Settings > API trên Supabase Dashboard. 
+                        Thông tin được lưu trong LocalStorage của trình duyệt.
+                      </p>
+                      <button 
+                        onClick={handleSaveCloudConfig}
+                        className="bg-emerald-500 hover:bg-emerald-600 text-white px-8 py-3 rounded-xl text-xs font-black shadow-lg transition-all"
+                      >
+                        Lưu cấu hình Cloud
+                      </button>
+                   </div>
+                </div>
+              </div>
+
+              {/* Price Settings Sections */}
               <div className="bg-white p-10 rounded-[40px] border border-slate-200 shadow-xl">
-                 <div className="flex justify-between items-start mb-10 flex-wrap gap-4">
-                    <div>
-                       <h3 className="text-2xl font-black">Thiết lập Đơn giá</h3>
-                       <p className="text-slate-400 text-xs mt-1">Thay đổi đơn giá cơ sở cho hạ tầng và nhân sự.</p>
-                    </div>
-                    <div className="flex flex-col items-end gap-2">
-                       <button 
-                          onClick={handleCheckDb} 
-                          className="px-4 py-2 bg-slate-900 text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-indigo-600 transition-all"
-                       >
-                          Kiểm tra kết nối Database
-                       </button>
-                       {dbStatus.status !== 'idle' && (
-                          <div className={`text-[10px] font-bold ${dbStatus.status === 'error' ? 'text-red-500' : 'text-emerald-500'} animate-in fade-in`}>
-                             {String(dbStatus.message || '')}
-                          </div>
-                       )}
-                    </div>
+                 <div className="mb-10">
+                    <h3 className="text-2xl font-black">Thiết lập Đơn giá</h3>
+                    <p className="text-slate-400 text-xs mt-1">Thay đổi đơn giá cơ sở cho hạ tầng và nhân sự.</p>
                  </div>
                  <div className="grid grid-cols-1 md:grid-cols-2 gap-12">
                    <div className="space-y-6">
-                     <p className="text-xs font-black text-indigo-600 uppercase border-b pb-2">Hạ tầng Cloud</p>
+                     <p className="text-xs font-black text-indigo-600 uppercase border-b pb-2 tracking-widest">Hạ tầng Cloud</p>
                      <PriceRow label="1 vCPU" value={currentProject.infraPrices.cpu} onChange={(v) => updateProject({ infraPrices: {...currentProject.infraPrices, cpu: v}})} />
                      <PriceRow label="1 GB RAM" value={currentProject.infraPrices.ram} onChange={(v) => updateProject({ infraPrices: {...currentProject.infraPrices, ram: v}})} />
                      <PriceRow label="SSD All Flash (GB)" value={currentProject.infraPrices.diskSanAllFlash} onChange={(v) => updateProject({ infraPrices: {...currentProject.infraPrices, diskSanAllFlash: v}})} />
@@ -498,7 +555,7 @@ const App: React.FC = () => {
                      <PriceRow label="OS Windows" value={currentProject.infraPrices.osWindows} onChange={(v) => updateProject({ infraPrices: {...currentProject.infraPrices, osWindows: v}})} />
                    </div>
                    <div className="space-y-6">
-                     <p className="text-xs font-black text-emerald-600 uppercase border-b pb-2">Nhân sự (Manday)</p>
+                     <p className="text-xs font-black text-emerald-600 uppercase border-b pb-2 tracking-widest">Nhân sự (Manday)</p>
                      {Object.values(Role).map(r => (
                        <PriceRow key={r} label={r} value={currentProject.laborPrices[r] || 0} onChange={(v) => updateProject({ laborPrices: {...currentProject.laborPrices, [r]: v}})} unit="VNĐ/NGÀY" />
                      ))}
@@ -512,29 +569,29 @@ const App: React.FC = () => {
         {/* Modal Script Triển Khai */}
         {showScriptModal && (
           <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
-             <div className="bg-white rounded-[32px] w-full max-w-2xl overflow-hidden shadow-2xl flex flex-col max-h-[80vh]">
-                <div className="p-6 border-b flex justify-between items-center">
+             <div className="bg-white rounded-[32px] w-full max-w-2xl overflow-hidden shadow-2xl flex flex-col max-h-[80vh] animate-in zoom-in duration-200">
+                <div className="p-6 border-b flex justify-between items-center bg-slate-50">
                    <h3 className="font-black text-lg">Deployment Script</h3>
-                   <button onClick={() => setShowScriptModal(false)} className="text-slate-400 hover:text-slate-600 text-2xl">×</button>
+                   <button onClick={() => setShowScriptModal(false)} className="text-slate-400 hover:text-slate-600 text-2xl transition-colors">×</button>
                 </div>
                 <div className="p-6 overflow-y-auto bg-slate-50 flex-1">
-                   <pre className="text-xs font-mono bg-slate-900 text-indigo-300 p-6 rounded-2xl whitespace-pre-wrap leading-relaxed border border-white/10 shadow-inner">
+                   <pre className="text-[11px] font-mono bg-slate-900 text-indigo-300 p-6 rounded-2xl whitespace-pre-wrap leading-relaxed border border-white/10 shadow-inner">
                       {String(deploymentScript)}
                    </pre>
                 </div>
-                <div className="p-6 border-t flex justify-end gap-2">
+                <div className="p-6 border-t flex justify-end gap-2 bg-white">
                    <button 
                       onClick={() => {
                          navigator.clipboard.writeText(deploymentScript);
                          alert("Đã sao chép script vào Clipboard!");
                       }} 
-                      className="px-6 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold"
+                      className="px-6 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold transition-all hover:bg-indigo-700 active:scale-95"
                    >
                       Sao chép Script
                    </button>
                    <button 
                       onClick={() => setShowScriptModal(false)} 
-                      className="px-6 py-2 bg-slate-100 text-slate-600 rounded-xl text-xs font-bold"
+                      className="px-6 py-2 bg-slate-100 text-slate-600 rounded-xl text-xs font-bold hover:bg-slate-200"
                    >
                       Đóng
                    </button>
@@ -543,15 +600,15 @@ const App: React.FC = () => {
           </div>
         )}
 
-        <footer className="h-20 bg-[#0F172A] text-white px-8 flex items-center justify-between shrink-0">
+        <footer className="h-20 bg-[#0F172A] text-white px-8 flex items-center justify-between shrink-0 shadow-2xl relative z-20">
           <div className="flex gap-10">
             <div>
-              <p className="text-[8px] text-slate-500 font-bold uppercase">Tổng Mandays</p>
+              <p className="text-[8px] text-slate-500 font-bold uppercase tracking-widest">Tổng lực lượng</p>
               <p className="text-xl font-black">{(autoLaborStats.devTotal + manualLaborTotal / (currentProject.laborPrices[Role.JuniorDev] || 1) + autoLaborStats.pm + autoLaborStats.ba + autoLaborStats.tester).toFixed(1)} MD</p>
             </div>
           </div>
           <div className="text-right">
-            <p className="text-[8px] text-indigo-400 font-bold uppercase">TỔNG DỰ TOÁN THÁNG</p>
+            <p className="text-[8px] text-indigo-400 font-bold uppercase tracking-widest">TỔNG DỰ TOÁN THÁNG</p>
             <p className="text-2xl font-black">{formatCurrency(grandTotal)}</p>
           </div>
         </footer>

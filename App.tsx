@@ -161,6 +161,11 @@ const App: React.FC = () => {
     return (currentProject.labors || []).reduce((sum, l) => sum + calculateLaborCost(l, currentProject.laborPrices), 0);
   }, [currentProject]);
 
+  const tableMandaysTotal = useMemo(() => {
+    if (!currentProject) return 0;
+    return (currentProject.labors || []).reduce((sum, l) => sum + (l.mandays || 0), 0);
+  }, [currentProject]);
+
   const autoLaborTotal = useMemo(() => {
     if (!currentProject) return 0;
     const lp = currentProject.laborPrices;
@@ -604,7 +609,7 @@ const App: React.FC = () => {
           <div className="flex gap-10">
             <div>
               <p className="text-[8px] text-slate-500 font-bold uppercase tracking-widest">Tổng lực lượng</p>
-              <p className="text-xl font-black">{(autoLaborStats.devTotal + manualLaborTotal / (currentProject.laborPrices[Role.JuniorDev] || 1) + autoLaborStats.pm + autoLaborStats.ba + autoLaborStats.tester).toFixed(1)} MD</p>
+              <p className="text-xl font-black">{(tableMandaysTotal + autoLaborStats.pm + autoLaborStats.ba + autoLaborStats.tester).toFixed(1)} MD</p>
             </div>
           </div>
           <div className="text-right">

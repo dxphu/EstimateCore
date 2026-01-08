@@ -526,7 +526,7 @@ const App: React.FC = () => {
                    </div>
                    <div className="mt-8 flex items-center justify-between">
                       <p className="text-[10px] text-indigo-400 font-medium max-w-md italic">
-                        * Bạn có thể lấy các thông tin này tại: Project Settings > API trên Supabase Dashboard. 
+                        Bạn có thể lấy các thông tin này tại: Project Settings  API trên Supabase Dashboard. 
                         Thông tin được lưu trong LocalStorage của trình duyệt.
                       </p>
                       <button 

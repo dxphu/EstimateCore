@@ -1,21 +1,12 @@
-
 import { GoogleGenAI } from "@google/genai";
 import { ServerItem, LaborItem } from "./types";
 
-const getApiKey = (): string => {
-  try {
-    return (typeof process !== 'undefined' && process.env) ? (process.env.API_KEY || '') : '';
-  } catch {
-    return '';
-  }
-};
-
-const apiKey = getApiKey();
-
+/**
+ * Analyzes the software project architecture including infra and labors using Gemini AI.
+ */
 export const analyzeArchitecture = async (items: ServerItem[], labors?: LaborItem[]) => {
-  if (!apiKey) return "API Key không khả dụng. Vui lòng thiết lập biến môi trường.";
-  
-  const ai = new GoogleGenAI({ apiKey });
+  // Use process.env.API_KEY directly as per guidelines
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
   const prompt = `
     Bạn là một chuyên gia tư vấn dự toán dự án phần mềm chuyên nghiệp. 
     Hãy phân tích bảng tính dự toán dưới đây bao gồm cả hạ tầng và nhân sự:
@@ -35,10 +26,12 @@ export const analyzeArchitecture = async (items: ServerItem[], labors?: LaborIte
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
+      // Using gemini-3-pro-preview for complex reasoning tasks
+      model: 'gemini-3-pro-preview',
       contents: prompt
     });
     
+    // .text is a property access as per guidelines
     return response.text || "Không tìm thấy nội dung phản hồi từ AI.";
   } catch (error: any) {
     console.error("Gemini Analysis Error:", error);
@@ -46,10 +39,12 @@ export const analyzeArchitecture = async (items: ServerItem[], labors?: LaborIte
   }
 };
 
+/**
+ * Predicts mandays for a specific task based on title and description.
+ */
 export const predictTaskMandays = async (title: string, description: string, role: string) => {
-  if (!apiKey) return null;
-  
-  const ai = new GoogleGenAI({ apiKey });
+  // Use process.env.API_KEY directly as per guidelines
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
   const prompt = `
     Ước lượng số công (Mandays) cho công việc:
     Tiêu đề: ${title}
@@ -65,6 +60,7 @@ export const predictTaskMandays = async (title: string, description: string, rol
       contents: prompt
     });
     
+    // .text is a property access
     const result = (response.text || "").trim();
     const manday = parseFloat(result);
     return isNaN(manday) ? 0 : manday;

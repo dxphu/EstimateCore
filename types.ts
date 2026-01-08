@@ -9,7 +9,8 @@ export enum Role {
   PM = "Project Manager",
   SeniorDev = "Senior Developer",
   JuniorDev = "Junior Developer",
-  Tester = "Tester/QA",
+  Tester = "Tester",
+  QC = "Quality Control",
   Designer = "UI/UX Designer",
   BA = "Business Analyst"
 }

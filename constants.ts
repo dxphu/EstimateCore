@@ -24,6 +24,7 @@ export const INITIAL_LABOR_PRICES: { [key: string]: number } = {
   [Role.SeniorDev]: 2200000,
   [Role.JuniorDev]: 1200000,
   [Role.Tester]: 1000000,
+  [Role.QC]: 1100000,
   [Role.Designer]: 1800000
 };
 
@@ -58,7 +59,7 @@ export const INITIAL_LABOR_ITEMS: LaborItem[] = [
     id: 'l2',
     taskName: 'Thiết kế Database',
     role: Role.SeniorDev,
-    mandays: 5,
+    mandays: 15,
     description: 'Thiết kế schema cho dự án',
     status: TaskStatus.Doing,
     priority: Priority.Urgent,

@@ -7,7 +7,7 @@ import { ServerItem, LaborItem } from "./types";
  */
 export const analyzeArchitecture = async (items: ServerItem[], labors?: LaborItem[]) => {
   // Use process.env.API_KEY directly as per guidelines
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const ai = new GoogleGenAI({ apiKey: "AIzaSyADWfQXkQeleCdFu56oeHC3YD-xnWb2lMk" });
   const prompt = `
     Bạn là một chuyên gia tư vấn dự toán dự án phần mềm chuyên nghiệp. 
     Hãy phân tích bảng tính dự toán dưới đây bao gồm cả hạ tầng và nhân sự:

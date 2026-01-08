@@ -2,9 +2,20 @@
 import { GoogleGenAI } from "@google/genai";
 import { ServerItem, LaborItem } from "./types";
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+const getApiKey = (): string => {
+  try {
+    return (typeof process !== 'undefined' && process.env) ? (process.env.API_KEY || '') : '';
+  } catch {
+    return '';
+  }
+};
+
+const apiKey = getApiKey();
 
 export const analyzeArchitecture = async (items: ServerItem[], labors?: LaborItem[]) => {
+  if (!apiKey) return "API Key không khả dụng. Vui lòng thiết lập biến môi trường.";
+  
+  const ai = new GoogleGenAI({ apiKey });
   const prompt = `
     Bạn là một chuyên gia tư vấn dự toán dự án phần mềm chuyên nghiệp. 
     Hãy phân tích bảng tính dự toán dưới đây bao gồm cả hạ tầng và nhân sự:
@@ -16,16 +27,16 @@ export const analyzeArchitecture = async (items: ServerItem[], labors?: LaborIte
     ${JSON.stringify(labors || [], null, 2)}
     
     Yêu cầu:
-    1. Kiểm tra xem cấu hình hạ tầng có quá lớn hay quá nhỏ so với số lượng manday và các đầu việc không.
-    2. Đánh giá rủi ro về mặt chi phí và tiến độ dựa trên các vai trò (PM, BA, Dev).
-    3. Đề xuất tối ưu hóa (ví dụ: nếu dev nhiều mà hạ tầng ít, có thể thiếu môi trường staging/testing).
-    4. Phản hồi bằng tiếng Việt chuyên nghiệp, ngắn gọn, súc tích.
+    1. Kiểm tra xem cấu hình hạ tầng có quá lớn hay quá nhỏ không.
+    2. Đánh giá rủi ro về mặt chi phí và tiến độ.
+    3. Đề xuất tối ưu hóa.
+    4. Phản hồi bằng tiếng Việt chuyên nghiệp, ngắn gọn.
   `;
 
   try {
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
-      contents: prompt,
+      contents: prompt
     });
     
     return response.text || "Không tìm thấy nội dung phản hồi từ AI.";
@@ -36,27 +47,25 @@ export const analyzeArchitecture = async (items: ServerItem[], labors?: LaborIte
 };
 
 export const predictTaskMandays = async (title: string, description: string, role: string) => {
+  if (!apiKey) return null;
+  
+  const ai = new GoogleGenAI({ apiKey });
   const prompt = `
-    Bạn là một Chuyên gia Quản trị Dự án (PM) và Senior Developer.
-    Hãy ước lượng số công (Mandays) cần thiết để hoàn thành công việc sau:
-    
+    Ước lượng số công (Mandays) cho công việc:
     Tiêu đề: ${title}
     Mô tả: ${description}
-    Vai trò thực hiện: ${role}
+    Vai trò: ${role}
     
-    Yêu cầu:
-    - Chỉ trả về DUY NHẤT 1 CON SỐ (có thể là số thập phân như 0.5, 1.5, 2).
-    - Không giải thích thêm.
-    - Nếu thông tin quá ít, hãy đưa ra con số trung bình dựa trên kinh nghiệm thực tế cho loại việc này.
+    Yêu cầu: Chỉ trả về duy nhất 1 con số.
   `;
 
   try {
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
-      contents: prompt,
+      contents: prompt
     });
     
-    const result = response.text.trim();
+    const result = (response.text || "").trim();
     const manday = parseFloat(result);
     return isNaN(manday) ? 0 : manday;
   } catch (error) {

@@ -2,8 +2,17 @@
 import { createClient } from '@supabase/supabase-js';
 import { ParsedConfig, ServerItem, UnitPrices, CalculationResult, LaborItem, LaborPrices, Project, Role } from './types';
 
-const supabaseUrl = process.env.SUPABASE_URL || '';
-const supabaseKey = process.env.SUPABASE_ANON_KEY || '';
+// Truy cập an toàn vào process.env
+const getEnv = (key: string): string => {
+  try {
+    return (typeof process !== 'undefined' && process.env) ? (process.env[key] || '') : '';
+  } catch {
+    return '';
+  }
+};
+
+const supabaseUrl = getEnv('SUPABASE_URL');
+const supabaseKey = getEnv('SUPABASE_ANON_KEY');
 
 export const supabase = (supabaseUrl && supabaseKey) ? createClient(supabaseUrl, supabaseKey) : null;
 
@@ -105,26 +114,31 @@ export const saveProjectToCloud = async (project: Project) => {
 export const fetchProjectsFromCloud = async (): Promise<Project[]> => {
   if (!supabase) return loadProjectsFromLocal();
 
-  const { data, error } = await supabase
-    .from('projects')
-    .select('*')
-    .order('last_modified', { ascending: false });
+  try {
+    const { data, error } = await supabase
+      .from('projects')
+      .select('*')
+      .order('last_modified', { ascending: false });
 
-  if (error) {
-    console.error("Cloud fetch error:", error);
+    if (error) {
+      console.error("Cloud fetch error:", error);
+      return loadProjectsFromLocal();
+    }
+
+    return (data || []).map(p => ({
+      id: p.id,
+      name: p.name,
+      servers: p.servers,
+      labors: p.labors,
+      infraPrices: p.infra_prices,
+      laborPrices: p.labor_prices,
+      createdAt: p.created_at,
+      lastModified: p.last_modified
+    }));
+  } catch (err) {
+    console.error("Critical fetch error:", err);
     return loadProjectsFromLocal();
   }
-
-  return data.map(p => ({
-    id: p.id,
-    name: p.name,
-    servers: p.servers,
-    labors: p.labors,
-    infraPrices: p.infra_prices,
-    laborPrices: p.labor_prices,
-    createdAt: p.created_at,
-    lastModified: p.last_modified
-  }));
 };
 
 export const deleteProjectFromCloud = async (id: string) => {

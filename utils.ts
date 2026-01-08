@@ -2,17 +2,19 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import * as XLSX from 'xlsx';
 import { ParsedConfig, ServerItem, UnitPrices, CalculationResult, LaborItem, LaborPrices, Project, Role } from './types';
 
-// ========================================================
-// CẤU HÌNH SUPABASE TRỰC TIẾP TẠI ĐÂY
-// Lấy tại: Supabase Dashboard > Settings > API
-// ========================================================
-const HARDCODED_URL = 'https://pggapuatkhocxihyuprx.supabase.co'; // Dán Project URL vào đây (ví dụ: https://xyz.supabase.co)
-const HARDCODED_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBnZ2FwdWF0a2hvY3hpaHl1cHJ4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc4Mzg1ODYsImV4cCI6MjA4MzQxNDU4Nn0.I53sjZUgiS0ndCTii7_yVRLv5tAeCSCJKGrIwTfLn3k'; // Dán Anon Key vào đây (chuỗi rất dài)
-// ========================================================
+// ========================================================================
+// CHÚ Ý: KHÔNG dán chuỗi "postgresql://..." vào đây.
+// Hãy vào Supabase Dashboard > Settings > API để lấy URL và Anon Key.
+// ========================================================================
+const HARDCODED_URL = 'https://pggapuatkhocxihyuprx.supabase.co'; 
+const HARDCODED_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBnZ2FwdWF0a2hvY3hpaHl1cHJ4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc4Mzg1ODYsImV4cCI6MjA4MzQxNDU4Nn0.I53sjZUgiS0ndCTii7_yVRLv5tAeCSCJKGrIwTfLn3k';
+// ========================================================================
 
 const getEnv = (key: string): string => {
   try {
-    return (typeof process !== 'undefined' && process.env) ? (process.env[key] || '') : '';
+    // Kiểm tra an toàn cho môi trường build/browser
+    const env = (typeof process !== 'undefined' && process.env) ? process.env : {};
+    return (env as any)[key] || '';
   } catch (e) {
     return '';
   }
@@ -26,7 +28,7 @@ export interface CloudConfig {
 }
 
 export const getCloudConfig = (): CloudConfig => {
-  // Nếu đã dán trong code, ưu tiên dùng luôn
+  // Ưu tiên thông tin dán trực tiếp trong code
   if (HARDCODED_URL && HARDCODED_KEY) {
     return { url: HARDCODED_URL, key: HARDCODED_KEY };
   }
@@ -50,6 +52,7 @@ export const getSupabase = (): SupabaseClient | null => {
   if (supabaseInstance) return supabaseInstance;
   const config = getCloudConfig();
   if (config.url && config.key) {
+    // Khởi tạo client Supabase
     supabaseInstance = createClient(config.url, config.key);
     return supabaseInstance;
   }
@@ -62,13 +65,14 @@ export const resetSupabaseInstance = () => {
 
 export const checkSupabaseConnection = async (): Promise<{ success: boolean; message: string }> => {
   const client = getSupabase();
-  if (!client) return { success: false, message: "Chưa cấu hình Supabase URL/Key." };
+  if (!client) return { success: false, message: "Chưa cấu hình Supabase URL/Key. Vui lòng kiểm tra lại file utils.ts." };
   try {
-    const { data, error } = await client.from('projects').select('count', { count: 'exact', head: true });
+    // Kiểm tra nhanh bằng cách gọi bảng projects
+    const { error } = await client.from('projects').select('id').limit(1);
     if (error) throw error;
-    return { success: true, message: "Kết nối Cloud Database thành công!" };
+    return { success: true, message: "Kết nối Supabase Cloud thành công!" };
   } catch (err: any) {
-    return { success: false, message: `Lỗi kết nối: ${err.message || 'Không xác định. Hãy kiểm tra lại URL/Key hoặc bảng projects.'}` };
+    return { success: false, message: `Lỗi kết nối: ${err.message || 'Hãy đảm bảo bạn đã chạy SQL Script tạo bảng.'}` };
   }
 };
 
@@ -199,6 +203,7 @@ export const fetchProjectsFromCloud = async (): Promise<Project[]> => {
       lastModified: p.last_modified
     }));
   } catch (err) {
+    console.warn("Using local projects due to cloud fetch error", err);
     return loadProjectsFromLocal();
   }
 };
@@ -277,7 +282,7 @@ echo "Starting infrastructure provisioning for ${project.name}..."
     script += `echo "Config: ${config.cpu} vCPU, ${config.ram}GB RAM, ${config.storage}GB Disk (${s.storageType})" \n`;
     
     if (s.os.toLowerCase().includes('ubuntu') || s.os.toLowerCase().includes('linux')) {
-      script += `# Example CLI Command (Dummy Example for cloud provider)\n`;
+      script += `# Example CLI Command\n`;
       script += `cloud-cli compute instance create --name "${s.content.replace(/\s+/g, '-')}" --cpu ${config.cpu} --ram ${config.ram} --disk ${config.storage} --image "${s.os}" --count ${s.quantity}\n`;
     } else {
       script += `# Manual provisioning required for Windows OS\n`;
@@ -285,10 +290,6 @@ echo "Starting infrastructure provisioning for ${project.name}..."
     script += `\n`;
   });
 
-  script += `echo "Provisioning complete. Setting up network bandwidth configurations..."\n`;
-  script += `echo "Internal: ${project.servers.reduce((sum, s) => sum + s.bwInternal, 0)} Mbps Total"\n`;
-  script += `echo "International: ${project.servers.reduce((sum, s) => sum + s.bwQt, 0)} Mbps Total"\n`;
-  script += `\necho "EstimaCore: Deployment script execution finished."\n`;
-  
+  script += `echo "Provisioning complete."\n`;
   return script;
 };

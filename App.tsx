@@ -102,11 +102,19 @@ const App: React.FC = () => {
 
   const infraTotal = useMemo(() => currentProject ? (currentProject.servers || []).reduce((sum, s) => sum + calculateItemCost(s, currentProject.infraPrices).totalPrice, 0) : 0, [currentProject]);
   const manualLaborTotal = useMemo(() => currentProject ? (currentProject.labors || []).reduce((sum, l) => sum + calculateLaborCost(l, currentProject.laborPrices), 0) : 0, [currentProject]);
+  
+  // CHI PHÍ GIÁN TIẾP (AUTO CALCULATION)
   const autoLaborStats = useMemo(() => {
     if (!currentProject) return { pm: 0, ba: 0, tester: 0, devTotal: 0 };
+    // Lấy tổng mandays của Senior và Junior Dev để làm căn cứ tính tỷ lệ EM/BA/Tester
     const devMandays = currentProject.labors.filter(l => l.role === Role.SeniorDev || l.role === Role.JuniorDev).reduce((sum, l) => sum + (l.mandays || 0), 0);
-    const ratio = 1 / 3;
-    return { devTotal: devMandays, pm: devMandays * ratio, ba: devMandays * ratio, tester: devMandays * ratio };
+    const ratio = 1 / 3; // Tỷ lệ 1:3 (Cứ 3 dev thì cần 1 PM, 1 BA, 1 Tester)
+    return { 
+      devTotal: devMandays, 
+      pm: devMandays * ratio, 
+      ba: devMandays * ratio, 
+      tester: devMandays * ratio 
+    };
   }, [currentProject]);
   
   const autoLaborTotal = useMemo(() => {
@@ -356,7 +364,7 @@ const App: React.FC = () => {
                          <div>
                             <p className="text-[10px] font-bold text-slate-400 uppercase mb-2">Chi phí Nhân sự</p>
                             <p className="text-xl font-black text-slate-800">{formatCurrency(manualLaborTotal + autoLaborTotal)}</p>
-                            <p className="text-[10px] text-slate-500 mt-1 italic">BA, PM, Dev, Tester, Designer...</p>
+                            <p className="text-[10px] text-slate-500 mt-1 italic">Bao gồm cả quản lý dự án & QA gián tiếp</p>
                          </div>
                       </div>
                    </div>
@@ -408,7 +416,7 @@ const App: React.FC = () => {
           )}
 
           {activeTab === 'mandays' && (
-            <div className="space-y-6 animate-in fade-in duration-500">
+            <div className="space-y-6 animate-in fade-in duration-500 pb-20">
               <div className="flex justify-between items-center">
                 <div>
                    <h3 className="font-black text-2xl tracking-tight text-slate-800">Kế hoạch & Dự toán Chi tiết</h3>
@@ -433,6 +441,7 @@ const App: React.FC = () => {
                   <button onClick={() => updateProject({ labors: [...currentProject.labors, { id: 'l'+Date.now(), taskName: 'Công việc mới', role: Role.JuniorDev, mandays: 1, description: '', status: TaskStatus.Todo, priority: Priority.Medium, assignee: '', dueDate: '' }] })} className="bg-indigo-600 text-white px-6 py-2 rounded-xl text-xs font-bold shadow-lg shadow-indigo-200 hover:bg-indigo-500 transition-all">+ Thêm Task</button>
                 </div>
               </div>
+              
               <div className="bg-white rounded-[32px] border border-slate-200 shadow-xl overflow-hidden">
                 <table className="w-full text-left table-fixed">
                   <thead className="bg-slate-50 text-[10px] font-black uppercase text-slate-400 border-b">
@@ -445,6 +454,7 @@ const App: React.FC = () => {
                     </tr>
                   </thead>
                   <tbody>
+                    {/* TASK DANH SÁCH THỦ CÔNG */}
                     {currentProject.labors.map(l => (
                       <tr key={l.id} className="border-b border-slate-50 group hover:bg-slate-50/50 transition-colors">
                         <td className="px-6 py-4">
@@ -463,8 +473,57 @@ const App: React.FC = () => {
                         <td className="px-6 py-4 text-right"><button onClick={() => updateProject({ labors: currentProject.labors.filter(item => item.id !== l.id)})} className="text-red-400 opacity-0 group-hover:opacity-100 font-bold transition-all hover:scale-125">×</button></td>
                       </tr>
                     ))}
-                    {currentProject.labors.length === 0 && <tr><td colSpan={5} className="px-6 py-20 text-center text-xs text-slate-400 italic">Danh sách trống. Hãy thêm task mới hoặc nhập từ Excel để bắt đầu dự toán.</td></tr>}
+
+                    {/* DÒNG CHI PHÍ GIÁN TIẾP (AUTO) */}
+                    {autoLaborStats.devTotal > 0 && (
+                      <>
+                        <tr className="bg-slate-50/80">
+                          <td colSpan={5} className="px-6 py-2 text-[10px] font-black text-slate-400 uppercase tracking-widest border-y border-slate-100">Chi phí quản lý & Kiểm thử (Tự động - Tỷ lệ 1:3)</td>
+                        </tr>
+                        <tr className="border-b border-slate-50 bg-indigo-50/20 italic">
+                          <td className="px-6 py-4">
+                             <div className="font-bold text-xs text-indigo-600">Project Manager / EM</div>
+                             <div className="text-[10px] text-slate-400">Giám sát & Quản lý dự án</div>
+                          </td>
+                          <td className="px-6 py-4 text-[10px] text-slate-400 leading-snug">Tính toán tự động dựa trên tổng khối lượng Dev thực thi.</td>
+                          <td className="px-6 py-4 text-center font-bold text-xs text-indigo-500">{autoLaborStats.pm.toFixed(1)}</td>
+                          <td className="px-6 py-4 text-right font-black text-slate-500 text-xs">{formatCurrency(autoLaborStats.pm * (currentProject.laborPrices[Role.PM] || 0))}</td>
+                          <td className="px-6 py-4"></td>
+                        </tr>
+                        <tr className="border-b border-slate-50 bg-indigo-50/20 italic">
+                          <td className="px-6 py-4">
+                             <div className="font-bold text-xs text-indigo-600">Business Analyst</div>
+                             <div className="text-[10px] text-slate-400">Phân tích & Hỗ trợ nghiệp vụ</div>
+                          </td>
+                          <td className="px-6 py-4 text-[10px] text-slate-400 leading-snug">Đảm bảo yêu cầu được chuyển tải chính xác.</td>
+                          <td className="px-6 py-4 text-center font-bold text-xs text-indigo-500">{autoLaborStats.ba.toFixed(1)}</td>
+                          <td className="px-6 py-4 text-right font-black text-slate-500 text-xs">{formatCurrency(autoLaborStats.ba * (currentProject.laborPrices[Role.BA] || 0))}</td>
+                          <td className="px-6 py-4"></td>
+                        </tr>
+                        <tr className="border-b border-slate-50 bg-indigo-50/20 italic">
+                          <td className="px-6 py-4">
+                             <div className="font-bold text-xs text-indigo-600">Tester / QA</div>
+                             <div className="text-[10px] text-slate-400">Kiểm thử chất lượng sản phẩm</div>
+                          </td>
+                          <td className="px-6 py-4 text-[10px] text-slate-400 leading-snug">Kiểm thử định kỳ và nghiệm thu.</td>
+                          <td className="px-6 py-4 text-center font-bold text-xs text-indigo-500">{autoLaborStats.tester.toFixed(1)}</td>
+                          <td className="px-6 py-4 text-right font-black text-slate-500 text-xs">{formatCurrency(autoLaborStats.tester * (currentProject.laborPrices[Role.Tester] || 0))}</td>
+                          <td className="px-6 py-4"></td>
+                        </tr>
+                      </>
+                    )}
+                    
+                    {currentProject.labors.length === 0 && autoLaborStats.devTotal === 0 && <tr><td colSpan={5} className="px-6 py-20 text-center text-xs text-slate-400 italic">Danh sách trống. Hãy thêm task mới để bắt đầu dự toán.</td></tr>}
                   </tbody>
+                  {/* TỔNG KẾT TABLE */}
+                  <tfoot className="bg-slate-900 text-white">
+                     <tr>
+                        <td colSpan={2} className="px-6 py-4 font-black text-xs uppercase tracking-widest">Tổng chi phí nhân sự dự kiến</td>
+                        <td className="px-6 py-4 text-center font-black text-sm">{(manualLaborTotal/2000000 + autoLaborStats.pm + autoLaborStats.ba + autoLaborStats.tester).toFixed(1)} MD</td>
+                        <td className="px-6 py-4 text-right font-black text-lg text-indigo-400">{formatCurrency(manualLaborTotal + autoLaborTotal)}</td>
+                        <td className="px-6 py-4"></td>
+                     </tr>
+                  </tfoot>
                 </table>
               </div>
             </div>

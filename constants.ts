@@ -1,5 +1,5 @@
 
-import { ServerItem, Category, UnitPrices, Role, LaborItem, TaskStatus, Priority } from './types';
+import { ServerItem, Category, UnitPrices, Role, LaborItem, TaskStatus, Priority, JournalEntry, JournalEntryType } from './types';
 
 export const INITIAL_UNIT_PRICES: UnitPrices = {
   cpu: 166000,
@@ -64,5 +64,22 @@ export const INITIAL_LABOR_ITEMS: LaborItem[] = [
     priority: Priority.Urgent,
     assignee: 'Trần Thị B',
     dueDate: new Date().toISOString().split('T')[0]
+  }
+];
+
+export const INITIAL_JOURNAL: JournalEntry[] = [
+  {
+    id: 'j1',
+    type: JournalEntryType.Meeting,
+    date: new Date().toISOString().split('T')[0],
+    title: 'Họp khởi động dự án (Kick-off)',
+    content: 'Chốt danh sách nhân sự tham gia và phân chia module chính cho các Team.'
+  },
+  {
+    id: 'j2',
+    type: JournalEntryType.Milestone,
+    date: new Date(Date.now() + 86400000 * 7).toISOString().split('T')[0],
+    title: 'Hoàn thành Prototype UI/UX',
+    content: 'Khách hàng duyệt thiết kế giao diện mobile app và web admin.'
   }
 ];

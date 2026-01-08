@@ -28,6 +28,20 @@ export enum Priority {
   Urgent = "Khẩn cấp"
 }
 
+export enum JournalEntryType {
+  Meeting = "Cuộc họp",
+  Milestone = "Mốc quan trọng",
+  Note = "Ghi chú"
+}
+
+export interface JournalEntry {
+  id: string;
+  type: JournalEntryType;
+  date: string;
+  title: string;
+  content: string;
+}
+
 export interface UnitPrices {
   cpu: number;
   ram: number;
@@ -91,6 +105,7 @@ export interface Project {
   endDate?: string;
   servers: ServerItem[];
   labors: LaborItem[];
+  journal?: JournalEntry[];
   infraPrices: UnitPrices;
   laborPrices: LaborPrices;
   createdAt: number;

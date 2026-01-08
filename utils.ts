@@ -135,6 +135,7 @@ export const saveProjectToCloud = async (project: Project) => {
       end_date: project.endDate,
       servers: project.servers,
       labors: project.labors,
+      journal: project.journal,
       infra_prices: project.infraPrices,
       labor_prices: project.laborPrices,
       created_at: project.createdAt,
@@ -157,6 +158,7 @@ export const fetchProjectsFromCloud = async (): Promise<Project[]> => {
       endDate: p.end_date,
       servers: p.servers || [],
       labors: p.labors || [],
+      journal: p.journal || [],
       infraPrices: p.infra_prices,
       laborPrices: p.labor_prices,
       createdAt: p.created_at,
@@ -212,6 +214,17 @@ export const exportProjectToExcel = (project: Project) => {
     'Hạn hoàn thành': l.dueDate
   }));
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(laborData), 'Kế hoạch chi tiết');
+
+  // Tab Journal
+  if (project.journal && project.journal.length > 0) {
+    const journalData = project.journal.map(j => ({
+      'Ngày': j.date,
+      'Loại': j.type,
+      'Tiêu đề': j.title,
+      'Nội dung': j.content
+    }));
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(journalData), 'Nhật ký dự án');
+  }
 
   XLSX.writeFile(workbook, `${project.name.replace(/\s+/g, '_')}_EstimaCore.xlsx`);
 };

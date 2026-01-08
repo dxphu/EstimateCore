@@ -1,12 +1,12 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import * as XLSX from 'xlsx';
-import { ServerItem, LaborItem, Category, Role, Project, TaskStatus, Priority } from './types';
-import { INITIAL_SERVERS, INITIAL_LABOR_ITEMS, INITIAL_UNIT_PRICES, INITIAL_LABOR_PRICES } from './constants';
+import { ServerItem, LaborItem, Category, Role, Project, TaskStatus, Priority, JournalEntry, JournalEntryType } from './types';
+import { INITIAL_SERVERS, INITIAL_LABOR_ITEMS, INITIAL_UNIT_PRICES, INITIAL_LABOR_PRICES, INITIAL_JOURNAL } from './constants';
 import { calculateItemCost, calculateLaborCost, formatCurrency, saveProjectToCloud, fetchProjectsFromCloud, deleteProjectFromCloud, checkSupabaseConnection, generateDeploymentScript, exportProjectToExcel, mapStringToRole, downloadImportTemplate, getCloudConfig, saveCloudConfig, resetSupabaseInstance } from './utils';
 import { analyzeArchitecture, predictTaskMandays } from './geminiService';
 
-type Tab = 'overview' | 'mandays' | 'board' | 'infra' | 'settings';
+type Tab = 'overview' | 'mandays' | 'board' | 'infra' | 'journal' | 'settings';
 
 const PriorityBadge: React.FC<{ priority: Priority }> = ({ priority }) => {
   const colors = {
@@ -58,7 +58,7 @@ const App: React.FC = () => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
-  const [isDirty, setIsDirty] = useState(false);
+  const [showQuotation, setShowQuotation] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -70,7 +70,7 @@ const App: React.FC = () => {
           setProjects(data);
           setCurrentProjectId(data[0].id);
         } else {
-          const first: Project = { id: 'p1', name: 'Dự án Mẫu', servers: INITIAL_SERVERS, labors: INITIAL_LABOR_ITEMS, infraPrices: INITIAL_UNIT_PRICES, laborPrices: INITIAL_LABOR_PRICES, createdAt: Date.now(), lastModified: Date.now() };
+          const first: Project = { id: 'p1', name: 'Dự án Mẫu', servers: INITIAL_SERVERS, labors: INITIAL_LABOR_ITEMS, journal: INITIAL_JOURNAL, infraPrices: INITIAL_UNIT_PRICES, laborPrices: INITIAL_LABOR_PRICES, createdAt: Date.now(), lastModified: Date.now() };
           setProjects([first]);
           setCurrentProjectId('p1');
           await saveProjectToCloud(first);
@@ -86,29 +86,34 @@ const App: React.FC = () => {
     if (!currentProjectId || !currentProject) return;
     const updated = { ...currentProject, ...updates, lastModified: Date.now() };
     setProjects(prev => prev.map(p => p.id === currentProjectId ? updated : p));
-    setIsDirty(true);
   };
 
   const projectStats = useMemo(() => {
-    if (!currentProject) return { progress: 0, todo: 0, doing: 0, done: 0, total: 0 };
+    if (!currentProject) return { progress: 0, todo: 0, doing: 0, review: 0, done: 0, total: 0 };
     const tasks = currentProject.labors;
     const total = tasks.length;
-    if (total === 0) return { progress: 0, todo: 0, doing: 0, done: 0, total: 0 };
+    if (total === 0) return { progress: 0, todo: 0, doing: 0, review: 0, done: 0, total: 0 };
     const done = tasks.filter(t => t.status === TaskStatus.Done).length;
-    const doing = tasks.filter(t => t.status === TaskStatus.Doing || t.status === TaskStatus.Review).length;
+    const review = tasks.filter(t => t.status === TaskStatus.Review).length;
+    const doing = tasks.filter(t => t.status === TaskStatus.Doing).length;
     const todo = tasks.filter(t => t.status === TaskStatus.Todo).length;
-    return { progress: Math.round((done / total) * 100), todo, doing, done, total };
+    return { progress: Math.round((done / total) * 100), todo, doing, review, done, total };
+  }, [currentProject]);
+
+  const milestones = useMemo(() => {
+    if (!currentProject?.journal) return [];
+    return currentProject.journal
+      .filter(j => j.type === JournalEntryType.Milestone)
+      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
   }, [currentProject]);
 
   const infraTotal = useMemo(() => currentProject ? (currentProject.servers || []).reduce((sum, s) => sum + calculateItemCost(s, currentProject.infraPrices).totalPrice, 0) : 0, [currentProject]);
   const manualLaborTotal = useMemo(() => currentProject ? (currentProject.labors || []).reduce((sum, l) => sum + calculateLaborCost(l, currentProject.laborPrices), 0) : 0, [currentProject]);
   
-  // CHI PHÍ GIÁN TIẾP (AUTO CALCULATION)
   const autoLaborStats = useMemo(() => {
     if (!currentProject) return { pm: 0, ba: 0, tester: 0, devTotal: 0 };
-    // Lấy tổng mandays của Senior và Junior Dev để làm căn cứ tính tỷ lệ EM/BA/Tester
     const devMandays = currentProject.labors.filter(l => l.role === Role.SeniorDev || l.role === Role.JuniorDev).reduce((sum, l) => sum + (l.mandays || 0), 0);
-    const ratio = 1 / 3; // Tỷ lệ 1:3 (Cứ 3 dev thì cần 1 PM, 1 BA, 1 Tester)
+    const ratio = 1 / 3;
     return { 
       devTotal: devMandays, 
       pm: devMandays * ratio, 
@@ -132,41 +137,23 @@ const App: React.FC = () => {
     setIsSyncing(true); 
     try { 
       await saveProjectToCloud(currentProject); 
-      setIsDirty(false); 
       alert("Đã lưu thành công!"); 
     } catch (e) { alert("Lỗi lưu Cloud."); } finally { setIsSyncing(false); } 
   };
 
   const handleNewProject = () => {
     const id = 'p' + Date.now();
-    const newProj: Project = { 
-      id, 
-      name: 'Dự án mới', 
-      servers: [], 
-      labors: [], 
-      infraPrices: INITIAL_UNIT_PRICES, 
-      laborPrices: INITIAL_LABOR_PRICES, 
-      createdAt: Date.now(), 
-      lastModified: Date.now() 
-    };
+    const newProj: Project = { id, name: 'Dự án mới', servers: [], labors: [], journal: [], infraPrices: INITIAL_UNIT_PRICES, laborPrices: INITIAL_LABOR_PRICES, createdAt: Date.now(), lastModified: Date.now() };
     setProjects([newProj, ...projects]);
     setCurrentProjectId(id);
-    setIsDirty(true);
   };
 
   const handleDuplicateProject = () => {
     if (!currentProject) return;
     const id = 'p-copy-' + Date.now();
-    const copy: Project = { 
-      ...currentProject, 
-      id, 
-      name: `${currentProject.name} (Bản sao)`, 
-      createdAt: Date.now(), 
-      lastModified: Date.now() 
-    };
+    const copy: Project = { ...currentProject, id, name: `${currentProject.name} (Bản sao)`, createdAt: Date.now(), lastModified: Date.now() };
     setProjects([copy, ...projects]);
     setCurrentProjectId(id);
-    setIsDirty(true);
     alert("Đã nhân bản dự án!");
   };
 
@@ -175,9 +162,7 @@ const App: React.FC = () => {
     await deleteProjectFromCloud(id);
     const updated = projects.filter(p => p.id !== id);
     setProjects(updated);
-    if (currentProjectId === id) {
-      setCurrentProjectId(updated.length > 0 ? updated[0].id : null);
-    }
+    if (currentProjectId === id) setCurrentProjectId(updated.length > 0 ? updated[0].id : null);
   };
 
   const handleImportExcel = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -187,8 +172,7 @@ const App: React.FC = () => {
     reader.onload = (evt) => {
       const bstr = evt.target?.result;
       const wb = XLSX.read(bstr, { type: 'binary' });
-      const wsname = wb.SheetNames[0];
-      const ws = wb.Sheets[wsname];
+      const ws = wb.Sheets[wb.SheetNames[0]];
       const data: any[] = XLSX.utils.sheet_to_json(ws);
       const importedTasks: LaborItem[] = data.map((row, idx) => ({
         id: `l-imp-${Date.now()}-${idx}`,
@@ -225,10 +209,167 @@ const App: React.FC = () => {
     } catch (error) { console.error(error); } finally { setIsEstimatingAll(false); }
   };
 
+  const handleAddJournal = (type: JournalEntryType) => {
+    if (!currentProject) return;
+    const newEntry: JournalEntry = { id: 'j' + Date.now(), type, date: new Date().toISOString().split('T')[0], title: type === JournalEntryType.Meeting ? 'Cuộc họp mới' : 'Mốc quan trọng mới', content: '' };
+    updateProject({ journal: [newEntry, ...(currentProject.journal || [])] });
+  };
+
   if (isLoading || !currentProject) return <div className="min-h-screen bg-[#0F172A] flex flex-col items-center justify-center text-white font-black tracking-widest">
     <div className="w-16 h-16 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin mb-4"></div>
     ĐANG TẢI DỮ LIỆU...
   </div>;
+
+  // QUOTATION VIEW COMPONENT
+  if (showQuotation) {
+    return (
+      <div className="min-h-screen bg-white text-slate-900 p-8 md:p-16 print:p-0 font-sans max-w-5xl mx-auto shadow-2xl animate-in fade-in duration-500">
+        <div className="flex justify-between items-start mb-12 print:hidden">
+           <button onClick={() => setShowQuotation(false)} className="flex items-center gap-2 text-indigo-600 font-bold hover:bg-indigo-50 px-4 py-2 rounded-xl transition-all">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 19l-7-7m0 0l7-7m-7 7h18" /></svg>
+              Quay lại chỉnh sửa
+           </button>
+           <button onClick={() => window.print()} className="bg-indigo-600 text-white px-8 py-2 rounded-xl font-black shadow-lg shadow-indigo-200 flex items-center gap-2 hover:bg-indigo-500 transition-all">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" /></svg>
+              In Báo Giá (PDF)
+           </button>
+        </div>
+
+        <div id="quotation-content" className="border-t-8 border-indigo-600 pt-12">
+           <div className="flex justify-between mb-16">
+              <div>
+                 <h1 className="text-4xl font-black text-slate-800 tracking-tighter mb-2 uppercase">Báo Giá Dự Án</h1>
+                 <p className="text-slate-400 font-bold text-sm tracking-widest uppercase">Mã báo giá: #{currentProject.id.toUpperCase()}</p>
+              </div>
+              <div className="text-right">
+                 <h2 className="text-xl font-black text-indigo-600">EstimaCore Consulting</h2>
+                 <p className="text-xs text-slate-500 font-bold">Ngày lập: {new Date().toLocaleDateString('vi-VN')}</p>
+                 <p className="text-xs text-slate-500">Dự kiến thực hiện: {currentProject.startDate || 'TBD'} - {currentProject.endDate || 'TBD'}</p>
+              </div>
+           </div>
+
+           <div className="mb-12">
+              <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-4 border-b pb-2">Thông tin khách hàng / Dự án</h3>
+              <p className="text-2xl font-black text-slate-800">{currentProject.name}</p>
+              <p className="text-sm text-slate-500 mt-2 leading-relaxed">Báo giá này bao gồm chi tiết về hạ tầng đám mây (Cloud Infrastructure) và nguồn lực nhân sự (Labor Resources) cần thiết để triển khai dự án theo yêu cầu.</p>
+           </div>
+
+           {/* INFRA SECTION */}
+           {currentProject.servers.length > 0 && (
+             <div className="mb-12">
+                <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-4 flex justify-between items-center">
+                   <span>I. CHI TIẾT HẠ TẦNG CLOUD (HÀNG THÁNG)</span>
+                   <span className="text-slate-800">{formatCurrency(infraTotal)} / Tháng</span>
+                </h3>
+                <table className="w-full text-left">
+                   <thead className="bg-slate-50 text-[10px] font-black uppercase text-slate-500">
+                      <tr>
+                         <th className="p-3">Dịch vụ & Cấu hình</th>
+                         <th className="p-3 text-center">Số lượng</th>
+                         <th className="p-3 text-right">Đơn giá</th>
+                         <th className="p-3 text-right">Thành tiền</th>
+                      </tr>
+                   </thead>
+                   <tbody>
+                      {currentProject.servers.map(s => {
+                        const cost = calculateItemCost(s, currentProject.infraPrices);
+                        return (
+                          <tr key={s.id} className="border-b border-slate-100 text-xs">
+                             <td className="p-3">
+                                <div className="font-bold">{s.content}</div>
+                                <div className="text-[10px] text-slate-400">{s.configRaw}</div>
+                             </td>
+                             <td className="p-3 text-center">{s.quantity}</td>
+                             <td className="p-3 text-right">{formatCurrency(cost.unitPrice)}</td>
+                             <td className="p-3 text-right font-bold">{formatCurrency(cost.totalPrice)}</td>
+                          </tr>
+                        );
+                      })}
+                   </tbody>
+                </table>
+             </div>
+           )}
+
+           {/* LABOR SECTION */}
+           <div className="mb-12">
+              <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-4 flex justify-between items-center">
+                 <span>II. CHI TIẾT NGUỒN LỰC NHÂN SỰ</span>
+                 <span className="text-slate-800">{formatCurrency(manualLaborTotal + autoLaborTotal)}</span>
+              </h3>
+              <table className="w-full text-left">
+                 <thead className="bg-slate-50 text-[10px] font-black uppercase text-slate-500">
+                    <tr>
+                       <th className="p-3">Vai trò chuyên môn</th>
+                       <th className="p-3 text-center">Khối lượng (MD)</th>
+                       <th className="p-3 text-right">Đơn giá/Ngày</th>
+                       <th className="p-3 text-right">Thành tiền</th>
+                    </tr>
+                 </thead>
+                 <tbody>
+                    {/* Manual Labors grouped by Role */}
+                    {Object.values(Role).map(role => {
+                      const tasks = currentProject.labors.filter(l => l.role === role);
+                      let md = tasks.reduce((s, t) => s + t.mandays, 0);
+                      
+                      // Add auto stats
+                      if (role === Role.PM) md += autoLaborStats.pm;
+                      if (role === Role.BA) md += autoLaborStats.ba;
+                      if (role === Role.Tester) md += autoLaborStats.tester;
+
+                      if (md <= 0) return null;
+
+                      return (
+                        <tr key={role} className="border-b border-slate-100 text-xs">
+                           <td className="p-3 font-bold">{role}</td>
+                           <td className="p-3 text-center">{md.toFixed(1)}</td>
+                           <td className="p-3 text-right">{formatCurrency(currentProject.laborPrices[role] || 0)}</td>
+                           <td className="p-3 text-right font-bold">{formatCurrency(md * (currentProject.laborPrices[role] || 0))}</td>
+                        </tr>
+                      );
+                    })}
+                 </tbody>
+              </table>
+           </div>
+
+           {/* SUMMARY */}
+           <div className="bg-slate-900 text-white p-8 rounded-3xl flex flex-col md:flex-row justify-between items-center">
+              <div>
+                 <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">TỔNG CHI PHÍ DỰ TOÁN (TCO)</p>
+                 <p className="text-xs text-slate-500">Bao gồm toàn bộ hạ tầng & nhân sự triển khai</p>
+              </div>
+              <div className="text-right mt-4 md:mt-0">
+                 <p className="text-4xl font-black text-indigo-400 tracking-tighter">{formatCurrency(grandTotal)}</p>
+                 <p className="text-[10px] text-slate-400 mt-2 italic">Bằng chữ: (Số tiền đã bao gồm các khoản thuế phí liên quan)</p>
+              </div>
+           </div>
+
+           <div className="mt-16 grid grid-cols-2 gap-20">
+              <div>
+                 <h4 className="text-xs font-black text-slate-800 uppercase mb-4">Điều khoản & Ghi chú:</h4>
+                 <ul className="text-[10px] text-slate-500 space-y-2 list-disc pl-4 leading-relaxed">
+                    <li>Báo giá có giá trị trong vòng 30 ngày kể từ ngày lập.</li>
+                    <li>Chi phí hạ tầng có thể thay đổi tùy theo biến động tỷ giá và thực tế sử dụng.</li>
+                    <li>Lịch trình thực hiện sẽ được chốt sau khi ký hợp đồng chính thức.</li>
+                 </ul>
+              </div>
+              <div className="text-center pt-8 border-t border-slate-100">
+                 <p className="text-xs font-black text-slate-400 uppercase tracking-widest mb-12">Xác nhận phê duyệt</p>
+                 <div className="w-40 h-px bg-slate-200 mx-auto mb-2"></div>
+                 <p className="text-[10px] font-bold text-slate-800">Người đại diện có thẩm quyền</p>
+              </div>
+           </div>
+        </div>
+        <style dangerouslySetInnerHTML={{ __html: `
+          @media print {
+            body { background: white !important; }
+            .print\\:hidden { display: none !important; }
+            #quotation-content { border-top: none !important; padding-top: 0 !important; }
+            shadow-2xl { box-shadow: none !important; }
+          }
+        `}} />
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] flex flex-col md:flex-row overflow-hidden font-sans">
@@ -243,6 +384,7 @@ const App: React.FC = () => {
             <NavItem id="overview" label="Tổng quan" icon={<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16m-7 6h7" strokeWidth="2" /></svg>} activeTab={activeTab} onClick={handleNavItemClick} />
             <NavItem id="mandays" label="Kế hoạch & Dự toán" icon={<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" strokeWidth="2" /></svg>} activeTab={activeTab} onClick={handleNavItemClick} />
             <NavItem id="board" label="Thực thi (Board)" icon={<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z" strokeWidth="2" /></svg>} activeTab={activeTab} onClick={handleNavItemClick} />
+            <NavItem id="journal" label="Nhật ký & Mốc" icon={<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" strokeWidth="2" /></svg>} activeTab={activeTab} onClick={handleNavItemClick} />
             <NavItem id="infra" label="Hạ tầng Cloud" icon={<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2" strokeWidth="2" /></svg>} activeTab={activeTab} onClick={handleNavItemClick} />
             <NavItem id="settings" label="Thiết lập" icon={<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2" strokeWidth="2" /></svg>} activeTab={activeTab} onClick={handleNavItemClick} />
           </nav>
@@ -261,11 +403,6 @@ const App: React.FC = () => {
                         <span className={`text-xs font-bold truncate ${currentProjectId === p.id ? 'text-white' : 'text-slate-400'}`}>{p.name}</span>
                         <span className="text-[9px] text-slate-600 font-medium">{new Date(p.lastModified).toLocaleDateString()}</span>
                      </div>
-                     {projects.length > 1 && (
-                       <button onClick={(e) => { e.stopPropagation(); handleDeleteProject(p.id); }} className="opacity-0 group-hover:opacity-100 p-1 hover:text-red-400 transition-all">
-                          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                       </button>
-                     )}
                   </div>
                 ))}
              </div>
@@ -301,6 +438,10 @@ const App: React.FC = () => {
             </div>
           </div>
           <div className="flex items-center gap-3">
+             <button onClick={() => setShowQuotation(true)} className="px-4 py-2 bg-indigo-50 text-indigo-600 rounded-xl text-xs font-black hover:bg-indigo-100 transition-all flex items-center gap-2">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+                XUẤT BÁO GIÁ
+             </button>
              <button onClick={() => exportProjectToExcel(currentProject)} className="px-4 py-2 bg-emerald-50 text-emerald-600 rounded-xl text-xs font-black hover:bg-emerald-100 transition-all flex items-center gap-2">
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
                 Báo cáo Excel
@@ -343,73 +484,99 @@ const App: React.FC = () => {
                 <div className="lg:col-span-2 space-y-6">
                    <div className="bg-white p-8 rounded-[40px] border border-slate-200 shadow-xl relative overflow-hidden">
                       <div className="flex justify-between items-center mb-6">
-                         <h4 className="font-black text-lg">Phân bổ Ngân sách</h4>
-                         <div className="flex gap-4">
-                            <div className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded-full bg-indigo-500"></div><span className="text-[10px] font-bold text-slate-500">Hạ tầng</span></div>
-                            <div className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded-full bg-amber-500"></div><span className="text-[10px] font-bold text-slate-500">Nhân sự</span></div>
-                         </div>
+                         <h4 className="font-black text-lg">Tiến độ công việc</h4>
+                         <span className="text-xs font-black text-indigo-600">{projectStats.done} / {projectStats.total} Task hoàn thành</span>
                       </div>
-                      
-                      <div className="w-full h-8 bg-slate-100 rounded-2xl overflow-hidden flex mb-8">
-                         <div className="bg-indigo-500 h-full transition-all duration-700" style={{ width: `${(infraTotal / (grandTotal || 1)) * 100}%` }}></div>
-                         <div className="bg-amber-500 h-full transition-all duration-700" style={{ width: `${((manualLaborTotal + autoLaborTotal) / (grandTotal || 1)) * 100}%` }}></div>
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-8">
-                         <div>
-                            <p className="text-[10px] font-bold text-slate-400 uppercase mb-2">Chi phí Hạ tầng</p>
-                            <p className="text-xl font-black text-slate-800">{formatCurrency(infraTotal)}</p>
-                            <p className="text-[10px] text-slate-500 mt-1 italic">Vận hành máy chủ, storage, network...</p>
+                      <div className="space-y-6">
+                         <div className="w-full h-4 bg-slate-100 rounded-full overflow-hidden flex">
+                            <div className="bg-emerald-500 h-full transition-all duration-700" style={{ width: `${(projectStats.done / (projectStats.total || 1)) * 100}%` }}></div>
+                            <div className="bg-amber-400 h-full transition-all duration-700" style={{ width: `${(projectStats.review / (projectStats.total || 1)) * 100}%` }}></div>
+                            <div className="bg-indigo-500 h-full transition-all duration-700" style={{ width: `${(projectStats.doing / (projectStats.total || 1)) * 100}%` }}></div>
+                            <div className="bg-slate-300 h-full transition-all duration-700" style={{ width: `${(projectStats.todo / (projectStats.total || 1)) * 100}%` }}></div>
                          </div>
-                         <div>
-                            <p className="text-[10px] font-bold text-slate-400 uppercase mb-2">Chi phí Nhân sự</p>
-                            <p className="text-xl font-black text-slate-800">{formatCurrency(manualLaborTotal + autoLaborTotal)}</p>
-                            <p className="text-[10px] text-slate-500 mt-1 italic">Bao gồm cả quản lý dự án & QA gián tiếp</p>
+                         <div className="grid grid-cols-4 gap-4">
+                            <div className="text-center">
+                               <p className="text-[10px] font-black text-slate-400 uppercase mb-1">Cần làm</p>
+                               <p className="text-sm font-black text-slate-600">{projectStats.todo}</p>
+                            </div>
+                            <div className="text-center">
+                               <p className="text-[10px] font-black text-indigo-600 uppercase mb-1">Đang làm</p>
+                               <p className="text-sm font-black text-indigo-600">{projectStats.doing}</p>
+                            </div>
+                            <div className="text-center">
+                               <p className="text-[10px] font-black text-amber-500 uppercase mb-1">Kiểm tra</p>
+                               <p className="text-sm font-black text-amber-600">{projectStats.review}</p>
+                            </div>
+                            <div className="text-center">
+                               <p className="text-[10px] font-black text-emerald-500 uppercase mb-1">Xong</p>
+                               <p className="text-sm font-black text-emerald-600">{projectStats.done}</p>
+                            </div>
                          </div>
                       </div>
                    </div>
 
                    <div className="bg-white p-8 rounded-[40px] border border-slate-200 shadow-xl relative overflow-hidden">
-                      <h4 className="font-black text-lg mb-4">Các Task Ưu tiên cao</h4>
-                      <div className="space-y-4">
-                        {currentProject.labors.filter(l => l.priority === Priority.Urgent || l.priority === Priority.High).slice(0, 4).map(task => (
-                          <div key={task.id} className="flex items-center justify-between p-4 bg-slate-50 rounded-2xl border border-slate-100 hover:shadow-sm transition-all">
-                             <div className="flex items-center gap-4">
-                                <PriorityBadge priority={task.priority} />
-                                <div>
-                                   <p className="text-xs font-bold text-slate-800">{task.taskName}</p>
-                                   <p className="text-[10px] text-slate-400 line-clamp-1">{task.description || 'Không có mô tả chi tiết'}</p>
-                                </div>
-                             </div>
-                             <div className="text-right">
-                                <StatusBadge status={task.status} />
-                                <p className="text-[9px] font-black text-slate-300 mt-1 uppercase">{task.assignee || 'Chưa phân'}</p>
-                             </div>
+                      <h4 className="font-black text-lg mb-6">Lộ trình & Mốc quan trọng</h4>
+                      <div className="space-y-6">
+                        {milestones.length > 0 ? (
+                          milestones.slice(0, 4).map((m, idx) => (
+                            <div key={m.id} className="flex gap-4 group">
+                               <div className="flex flex-col items-center">
+                                  <div className="w-3 h-3 rounded-full bg-amber-500 border-2 border-white shadow-sm ring-2 ring-amber-100"></div>
+                                  {idx !== milestones.slice(0, 4).length - 1 && <div className="w-0.5 flex-1 bg-slate-100 my-1"></div>}
+                               </div>
+                               <div className="pb-4">
+                                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-tighter">{new Date(m.date).toLocaleDateString('vi-VN', { day: 'numeric', month: 'short' })}</p>
+                                  <h5 className="text-xs font-black text-slate-800 mt-0.5">{m.title}</h5>
+                                  <p className="text-[10px] text-slate-400 line-clamp-1 mt-1">{m.content || 'Không có mô tả'}</p>
+                               </div>
+                            </div>
+                          ))
+                        ) : (
+                          <div className="text-center py-6">
+                             <p className="text-[10px] text-slate-400 italic">Chưa có mốc quan trọng nào được thiết lập.</p>
                           </div>
-                        ))}
-                        {currentProject.labors.filter(l => l.priority === Priority.Urgent || l.priority === Priority.High).length === 0 && <p className="text-center text-xs text-slate-400 py-6 italic">Không có task khẩn cấp.</p>}
+                        )}
                       </div>
                    </div>
                 </div>
 
                 <div className="space-y-6">
+                   <div className="bg-white p-8 rounded-[40px] border border-slate-200 shadow-xl">
+                      <h4 className="font-black text-lg mb-6">Phân bổ ngân sách</h4>
+                      <div className="flex justify-center mb-6">
+                        <div className="relative w-32 h-32">
+                          <svg className="w-full h-full transform -rotate-90" viewBox="0 0 36 36">
+                            <circle cx="18" cy="18" r="16" fill="none" className="stroke-indigo-100" strokeWidth="4"></circle>
+                            <circle cx="18" cy="18" r="16" fill="none" className="stroke-indigo-600" strokeWidth="4" 
+                              strokeDasharray={`${(infraTotal / (grandTotal || 1)) * 100} 100`}></circle>
+                          </svg>
+                          <div className="absolute inset-0 flex items-center justify-center flex-col">
+                             <span className="text-[10px] font-black text-slate-400">Infra</span>
+                             <span className="text-xs font-black text-slate-800">{Math.round((infraTotal / (grandTotal || 1)) * 100)}%</span>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="space-y-3">
+                         <div className="flex items-center justify-between text-[10px]">
+                            <span className="flex items-center gap-1.5 font-bold text-slate-500"><div className="w-2 h-2 rounded-full bg-indigo-600"></div> Hạ tầng</span>
+                            <span className="font-black">{formatCurrency(infraTotal)}</span>
+                         </div>
+                         <div className="flex items-center justify-between text-[10px]">
+                            <span className="flex items-center gap-1.5 font-bold text-slate-500"><div className="w-2 h-2 rounded-full bg-amber-500"></div> Nhân sự</span>
+                            <span className="font-black">{formatCurrency(manualLaborTotal + autoLaborTotal)}</span>
+                         </div>
+                      </div>
+                   </div>
+
                    <div className="bg-indigo-600 p-8 rounded-[40px] text-white shadow-2xl relative overflow-hidden">
                       <div className="absolute -right-4 -top-4 w-24 h-24 bg-indigo-500 rounded-full blur-2xl opacity-50"></div>
-                      <h4 className="font-black text-lg mb-2 relative z-10">AI Project Advisor</h4>
-                      <p className="text-xs text-indigo-100 mb-6 leading-relaxed relative z-10">Tôi sẽ phân tích cấu hình hạ tầng và dự toán nhân lực để tìm điểm bất hợp lý.</p>
-                      <button onClick={async () => { setIsAnalyzing(true); setAnalysis(await analyzeArchitecture(currentProject.servers, currentProject.labors)); setIsAnalyzing(false); }} className="w-full bg-white text-indigo-600 py-3 rounded-2xl text-xs font-black transition-all hover:bg-indigo-50 shadow-xl">
+                      <h4 className="font-black text-lg mb-2 relative z-10">AI Advisor</h4>
+                      <p className="text-xs text-indigo-100 mb-6 leading-relaxed relative z-10">Phân tích dự toán & hạ tầng.</p>
+                      <button onClick={async () => { setIsAnalyzing(true); setAnalysis(await analyzeArchitecture(currentProject.servers, currentProject.labors)); setIsAnalyzing(false); }} className="w-full bg-white text-indigo-600 py-3 rounded-2xl text-xs font-black hover:bg-indigo-50 transition-all">
                         {isAnalyzing ? "Đang xử lý..." : "Phân tích dự án"}
                       </button>
                    </div>
-                   {analysis && (
-                     <div className="bg-amber-50 border border-amber-200 p-6 rounded-[32px] text-amber-900 text-[11px] leading-relaxed whitespace-pre-line animate-in zoom-in duration-300 shadow-inner">
-                        <div className="flex items-center gap-2 mb-2">
-                           <svg className="w-4 h-4 text-amber-500" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" /></svg>
-                           <span className="font-black uppercase tracking-widest text-[10px]">Đánh giá từ AI:</span>
-                        </div>
-                        {analysis}
-                     </div>
-                   )}
                 </div>
               </div>
             </div>
@@ -418,27 +585,16 @@ const App: React.FC = () => {
           {activeTab === 'mandays' && (
             <div className="space-y-6 animate-in fade-in duration-500 pb-20">
               <div className="flex justify-between items-center">
-                <div>
-                   <h3 className="font-black text-2xl tracking-tight text-slate-800">Kế hoạch & Dự toán Chi tiết</h3>
-                   <div className="flex items-center gap-2 mt-1">
-                      <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-                      <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Đang cập nhật trực tiếp</p>
-                   </div>
-                </div>
+                <h3 className="font-black text-2xl tracking-tight text-slate-800">Kế hoạch & Dự toán Chi tiết</h3>
                 <div className="flex gap-2">
                   <input type="file" ref={fileInputRef} onChange={handleImportExcel} className="hidden" accept=".xlsx,.xls" />
-                  <button onClick={downloadImportTemplate} className="bg-white text-slate-600 border border-slate-200 px-4 py-2 rounded-xl text-xs font-bold hover:bg-slate-50 flex items-center gap-2 transition-all">
-                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10" /></svg>
-                     Mẫu nhập
-                  </button>
-                  <button onClick={() => fileInputRef.current?.click()} className="bg-white text-indigo-600 border border-indigo-100 px-4 py-2 rounded-xl text-xs font-bold hover:bg-indigo-50 flex items-center gap-2 transition-all shadow-sm">
-                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
+                  <button onClick={() => fileInputRef.current?.click()} className="bg-white text-indigo-600 border border-indigo-100 px-4 py-2 rounded-xl text-xs font-bold hover:bg-indigo-50 flex items-center gap-2 transition-all">
                      Nhập Excel
                   </button>
-                  <button onClick={handleEstimateAll} disabled={isEstimatingAll} className="bg-amber-100 text-amber-700 px-4 py-2 rounded-xl text-xs font-bold hover:bg-amber-200 shadow-sm transition-all">
+                  <button onClick={handleEstimateAll} disabled={isEstimatingAll} className="bg-amber-100 text-amber-700 px-4 py-2 rounded-xl text-xs font-bold hover:bg-amber-200 transition-all">
                     {isEstimatingAll ? "AI Đang tính..." : "AI Ước lượng"}
                   </button>
-                  <button onClick={() => updateProject({ labors: [...currentProject.labors, { id: 'l'+Date.now(), taskName: 'Công việc mới', role: Role.JuniorDev, mandays: 1, description: '', status: TaskStatus.Todo, priority: Priority.Medium, assignee: '', dueDate: '' }] })} className="bg-indigo-600 text-white px-6 py-2 rounded-xl text-xs font-bold shadow-lg shadow-indigo-200 hover:bg-indigo-500 transition-all">+ Thêm Task</button>
+                  <button onClick={() => updateProject({ labors: [...currentProject.labors, { id: 'l'+Date.now(), taskName: 'Công việc mới', role: Role.JuniorDev, mandays: 1, description: '', status: TaskStatus.Todo, priority: Priority.Medium, assignee: '', dueDate: '' }] })} className="bg-indigo-600 text-white px-6 py-2 rounded-xl text-xs font-bold hover:bg-indigo-500 transition-all">+ Thêm Task</button>
                 </div>
               </div>
               
@@ -454,74 +610,50 @@ const App: React.FC = () => {
                     </tr>
                   </thead>
                   <tbody>
-                    {/* TASK DANH SÁCH THỦ CÔNG */}
                     {currentProject.labors.map(l => (
                       <tr key={l.id} className="border-b border-slate-50 group hover:bg-slate-50/50 transition-colors">
                         <td className="px-6 py-4">
-                           <input className="w-full bg-transparent font-bold text-xs outline-none mb-1 border-b border-transparent focus:border-indigo-200" value={l.taskName} onChange={(e) => updateProject({ labors: currentProject.labors.map(item => item.id === l.id ? {...item, taskName: e.target.value} : item)})} />
-                           <select className="text-[10px] bg-slate-100 px-2 py-0.5 rounded border-none font-bold text-slate-500 cursor-pointer" value={l.role} onChange={(e) => updateProject({ labors: currentProject.labors.map(item => item.id === l.id ? {...item, role: e.target.value as Role} : item)})}>
+                           <input className="w-full bg-transparent font-bold text-xs outline-none mb-1" value={l.taskName} onChange={(e) => updateProject({ labors: currentProject.labors.map(item => item.id === l.id ? {...item, taskName: e.target.value} : item)})} />
+                           <select className="text-[10px] bg-slate-100 px-2 py-0.5 rounded border-none font-bold text-slate-500" value={l.role} onChange={(e) => updateProject({ labors: currentProject.labors.map(item => item.id === l.id ? {...item, role: e.target.value as Role} : item)})}>
                              {Object.values(Role).map(r => <option key={r} value={r}>{r}</option>)}
                            </select>
                         </td>
                         <td className="px-6 py-4">
-                           <textarea rows={1} className="w-full bg-transparent text-[11px] outline-none text-slate-500 resize-none border-b border-transparent focus:border-indigo-200" placeholder="Mô tả công việc..." value={l.description} onChange={(e) => updateProject({ labors: currentProject.labors.map(item => item.id === l.id ? {...item, description: e.target.value} : item)})} />
+                           <textarea rows={1} className="w-full bg-transparent text-[11px] outline-none text-slate-500 resize-none" value={l.description} onChange={(e) => updateProject({ labors: currentProject.labors.map(item => item.id === l.id ? {...item, description: e.target.value} : item)})} />
                         </td>
                         <td className="px-6 py-4 text-center">
-                          <input type="number" step="0.5" className="w-16 text-center bg-slate-100 rounded-lg py-1 text-xs font-bold outline-none border border-transparent focus:border-indigo-300" value={l.mandays} onChange={(e) => updateProject({ labors: currentProject.labors.map(item => item.id === l.id ? {...item, mandays: parseFloat(e.target.value) || 0} : item)})} />
+                          <input type="number" step="0.5" className="w-16 text-center bg-slate-100 rounded-lg py-1 text-xs font-bold outline-none" value={l.mandays} onChange={(e) => updateProject({ labors: currentProject.labors.map(item => item.id === l.id ? {...item, mandays: parseFloat(e.target.value) || 0} : item)})} />
                         </td>
                         <td className="px-6 py-4 text-right font-black text-slate-700 text-xs">{formatCurrency(calculateLaborCost(l, currentProject.laborPrices))}</td>
-                        <td className="px-6 py-4 text-right"><button onClick={() => updateProject({ labors: currentProject.labors.filter(item => item.id !== l.id)})} className="text-red-400 opacity-0 group-hover:opacity-100 font-bold transition-all hover:scale-125">×</button></td>
+                        <td className="px-6 py-4 text-right"><button onClick={() => updateProject({ labors: currentProject.labors.filter(item => item.id !== l.id)})} className="text-red-400 opacity-0 group-hover:opacity-100 font-bold hover:scale-125 transition-all">×</button></td>
                       </tr>
                     ))}
-
-                    {/* DÒNG CHI PHÍ GIÁN TIẾP (AUTO) */}
                     {autoLaborStats.devTotal > 0 && (
                       <>
-                        <tr className="bg-slate-50/80">
-                          <td colSpan={5} className="px-6 py-2 text-[10px] font-black text-slate-400 uppercase tracking-widest border-y border-slate-100">Chi phí quản lý & Kiểm thử (Tự động - Tỷ lệ 1:3)</td>
-                        </tr>
+                        <tr className="bg-slate-50/80"><td colSpan={5} className="px-6 py-2 text-[10px] font-black text-slate-400 uppercase tracking-widest border-y border-slate-100">Chi phí quản lý & QA (Tự động 1:3)</td></tr>
                         <tr className="border-b border-slate-50 bg-indigo-50/20 italic">
-                          <td className="px-6 py-4">
-                             <div className="font-bold text-xs text-indigo-600">Project Manager / EM</div>
-                             <div className="text-[10px] text-slate-400">Giám sát & Quản lý dự án</div>
-                          </td>
-                          <td className="px-6 py-4 text-[10px] text-slate-400 leading-snug">Tính toán tự động dựa trên tổng khối lượng Dev thực thi.</td>
-                          <td className="px-6 py-4 text-center font-bold text-xs text-indigo-500">{autoLaborStats.pm.toFixed(1)}</td>
+                          <td className="px-6 py-4 font-bold text-xs text-indigo-600">PM / EM</td>
+                          <td className="px-6 py-4 text-[10px] text-slate-400">Giám sát thực thi</td>
+                          <td className="px-6 py-4 text-center font-bold text-xs">{autoLaborStats.pm.toFixed(1)}</td>
                           <td className="px-6 py-4 text-right font-black text-slate-500 text-xs">{formatCurrency(autoLaborStats.pm * (currentProject.laborPrices[Role.PM] || 0))}</td>
-                          <td className="px-6 py-4"></td>
+                          <td></td>
                         </tr>
                         <tr className="border-b border-slate-50 bg-indigo-50/20 italic">
-                          <td className="px-6 py-4">
-                             <div className="font-bold text-xs text-indigo-600">Business Analyst</div>
-                             <div className="text-[10px] text-slate-400">Phân tích & Hỗ trợ nghiệp vụ</div>
-                          </td>
-                          <td className="px-6 py-4 text-[10px] text-slate-400 leading-snug">Đảm bảo yêu cầu được chuyển tải chính xác.</td>
-                          <td className="px-6 py-4 text-center font-bold text-xs text-indigo-500">{autoLaborStats.ba.toFixed(1)}</td>
-                          <td className="px-6 py-4 text-right font-black text-slate-500 text-xs">{formatCurrency(autoLaborStats.ba * (currentProject.laborPrices[Role.BA] || 0))}</td>
-                          <td className="px-6 py-4"></td>
-                        </tr>
-                        <tr className="border-b border-slate-50 bg-indigo-50/20 italic">
-                          <td className="px-6 py-4">
-                             <div className="font-bold text-xs text-indigo-600">Tester / QA</div>
-                             <div className="text-[10px] text-slate-400">Kiểm thử chất lượng sản phẩm</div>
-                          </td>
-                          <td className="px-6 py-4 text-[10px] text-slate-400 leading-snug">Kiểm thử định kỳ và nghiệm thu.</td>
-                          <td className="px-6 py-4 text-center font-bold text-xs text-indigo-500">{autoLaborStats.tester.toFixed(1)}</td>
-                          <td className="px-6 py-4 text-right font-black text-slate-500 text-xs">{formatCurrency(autoLaborStats.tester * (currentProject.laborPrices[Role.Tester] || 0))}</td>
-                          <td className="px-6 py-4"></td>
+                          <td className="px-6 py-4 font-bold text-xs text-indigo-600">BA / Tester</td>
+                          <td className="px-6 py-4 text-[10px] text-slate-400">QA & Phân tích</td>
+                          <td className="px-6 py-4 text-center font-bold text-xs">{(autoLaborStats.ba + autoLaborStats.tester).toFixed(1)}</td>
+                          <td className="px-6 py-4 text-right font-black text-slate-500 text-xs">{formatCurrency((autoLaborStats.ba * currentProject.laborPrices[Role.BA]) + (autoLaborStats.tester * currentProject.laborPrices[Role.Tester]))}</td>
+                          <td></td>
                         </tr>
                       </>
                     )}
-                    
-                    {currentProject.labors.length === 0 && autoLaborStats.devTotal === 0 && <tr><td colSpan={5} className="px-6 py-20 text-center text-xs text-slate-400 italic">Danh sách trống. Hãy thêm task mới để bắt đầu dự toán.</td></tr>}
                   </tbody>
-                  {/* TỔNG KẾT TABLE */}
                   <tfoot className="bg-slate-900 text-white">
                      <tr>
-                        <td colSpan={2} className="px-6 py-4 font-black text-xs uppercase tracking-widest">Tổng chi phí nhân sự dự kiến</td>
-                        <td className="px-6 py-4 text-center font-black text-sm">{(manualLaborTotal/2000000 + autoLaborStats.pm + autoLaborStats.ba + autoLaborStats.tester).toFixed(1)} MD</td>
+                        <td colSpan={2} className="px-6 py-4 font-black text-xs uppercase">Tổng chi phí nhân sự</td>
+                        <td className="px-6 py-4 text-center font-black text-sm">{((currentProject.labors.reduce((s,l)=>s+l.mandays,0)) + autoLaborStats.pm + autoLaborStats.ba + autoLaborStats.tester).toFixed(1)} MD</td>
                         <td className="px-6 py-4 text-right font-black text-lg text-indigo-400">{formatCurrency(manualLaborTotal + autoLaborTotal)}</td>
-                        <td className="px-6 py-4"></td>
+                        <td></td>
                      </tr>
                   </tfoot>
                 </table>
@@ -529,71 +661,60 @@ const App: React.FC = () => {
             </div>
           )}
 
-          {activeTab === 'board' && (
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-6 h-full pb-10 animate-in fade-in duration-500">
-               {[TaskStatus.Todo, TaskStatus.Doing, TaskStatus.Review, TaskStatus.Done].map(status => (
-                 <div key={status} className="flex flex-col gap-4">
-                    <div className="flex items-center justify-between px-2">
-                       <h4 className="font-black text-xs uppercase tracking-widest text-slate-500 flex items-center gap-2">
-                          <div className={`w-2 h-2 rounded-full ${status === TaskStatus.Todo ? 'bg-slate-300' : status === TaskStatus.Doing ? 'bg-indigo-500' : status === TaskStatus.Review ? 'bg-amber-400' : 'bg-emerald-500'}`}></div>
-                          {status}
-                       </h4>
-                       <span className="bg-slate-200 text-slate-600 text-[10px] px-2 py-0.5 rounded-full font-black">{currentProject.labors.filter(t => t.status === status).length}</span>
+          {activeTab === 'journal' && (
+            <div className="space-y-6 animate-in fade-in duration-500 pb-20">
+               <div className="flex justify-between items-center">
+                  <h3 className="font-black text-2xl tracking-tight text-slate-800">Nhật ký dự án</h3>
+                  <div className="flex gap-2">
+                     <button onClick={() => handleAddJournal(JournalEntryType.Meeting)} className="bg-indigo-50 text-indigo-600 border border-indigo-100 px-4 py-2 rounded-xl text-xs font-bold transition-all">+ Họp</button>
+                     <button onClick={() => handleAddJournal(JournalEntryType.Milestone)} className="bg-amber-50 text-amber-600 border border-amber-100 px-4 py-2 rounded-xl text-xs font-bold transition-all">+ Mốc</button>
+                  </div>
+               </div>
+               <div className="relative pl-8 border-l-2 border-slate-200 ml-4 space-y-10">
+                  {(currentProject.journal || []).map((entry) => (
+                    <div key={entry.id} className="relative">
+                       <div className={`absolute -left-[41px] top-0 w-5 h-5 rounded-full border-4 border-white shadow-sm ${entry.type === JournalEntryType.Milestone ? 'bg-amber-500 scale-125' : 'bg-indigo-500'}`}></div>
+                       <div className="bg-white p-6 rounded-[32px] border border-slate-200 shadow-sm">
+                          <div className="flex justify-between items-center mb-4">
+                             <div className="flex items-center gap-3">
+                                <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full ${entry.type === JournalEntryType.Milestone ? 'bg-amber-100 text-amber-600' : 'bg-indigo-100 text-indigo-600'}`}>{entry.type}</span>
+                                <input type="date" className="text-[10px] font-bold text-slate-400 bg-transparent outline-none" value={entry.date} onChange={(e) => updateProject({ journal: currentProject.journal?.map(j => j.id === entry.id ? {...j, date: e.target.value} : j) })} />
+                             </div>
+                             <button onClick={() => updateProject({ journal: currentProject.journal?.filter(j => j.id !== entry.id) })} className="text-slate-300 hover:text-red-500">×</button>
+                          </div>
+                          <input className="text-sm font-black text-slate-800 w-full bg-transparent border-none outline-none mb-2" value={entry.title} onChange={(e) => updateProject({ journal: currentProject.journal?.map(j => j.id === entry.id ? {...j, title: e.target.value} : j) })} />
+                          <textarea rows={3} className="text-xs text-slate-500 w-full bg-slate-50 p-4 rounded-2xl border-none outline-none resize-none" value={entry.content} onChange={(e) => updateProject({ journal: currentProject.journal?.map(j => j.id === entry.id ? {...j, content: e.target.value} : j) })} />
+                       </div>
                     </div>
-                    <div className="flex-1 space-y-4 min-h-[500px] bg-slate-200/30 p-4 rounded-3xl border border-slate-200/50">
-                       {currentProject.labors.filter(t => t.status === status).map(task => (
-                         <div key={task.id} className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 group hover:shadow-md transition-all">
-                            <div className="flex justify-between items-start mb-3">
-                               <PriorityBadge priority={task.priority} />
-                               <select className="opacity-0 group-hover:opacity-100 text-[9px] font-bold bg-slate-100 rounded px-1 transition-all outline-none cursor-pointer" value={task.status} onChange={(e) => updateProject({ labors: currentProject.labors.map(t => t.id === task.id ? {...t, status: e.target.value as TaskStatus} : t)})}>
-                                  {Object.values(TaskStatus).map(s => <option key={s} value={s}>{s}</option>)}
-                               </select>
-                            </div>
-                            <h5 className="font-bold text-xs text-slate-800 mb-2 leading-snug">{task.taskName}</h5>
-                            <p className="text-[10px] text-slate-400 line-clamp-2 mb-4 h-8">{task.description || 'Không có mô tả chi tiết'}</p>
-                            <div className="flex items-center justify-between mt-4">
-                               <div className="flex items-center gap-2">
-                                  <div className="w-6 h-6 rounded-full bg-indigo-50 border border-indigo-100 flex items-center justify-center text-[10px] font-bold text-indigo-600">
-                                    {task.assignee ? task.assignee.charAt(0) : '?'}
-                                  </div>
-                                  <input className="text-[10px] text-slate-400 bg-transparent border-none outline-none w-24 focus:text-indigo-600" placeholder="Gán việc..." value={task.assignee} onChange={(e) => updateProject({ labors: currentProject.labors.map(t => t.id === task.id ? {...t, assignee: e.target.value} : t)})} />
-                               </div>
-                               <span className="text-[10px] font-black text-slate-300">{task.mandays} MD</span>
-                            </div>
-                         </div>
-                       ))}
-                       <button onClick={() => updateProject({ labors: [...currentProject.labors, { id: 'l'+Date.now(), taskName: 'Task mới', role: Role.JuniorDev, mandays: 1, description: '', status: status, priority: Priority.Medium, assignee: '', dueDate: '' }] })} className="w-full py-3 border-2 border-dashed border-slate-200 rounded-2xl text-[10px] font-black text-slate-400 hover:border-indigo-300 hover:text-indigo-400 transition-all transition-colors">+ Task mới</button>
-                    </div>
-                 </div>
-               ))}
+                  ))}
+               </div>
             </div>
           )}
 
           {activeTab === 'infra' && (
             <div className="space-y-6 animate-in fade-in duration-500">
                <div className="flex justify-between items-center">
-                 <h3 className="font-black text-2xl tracking-tight text-slate-800">Tài nguyên Hạ tầng Cloud</h3>
-                 <button onClick={() => updateProject({ servers: [...currentProject.servers, { id: 's'+Date.now(), category: Category.AppServer, os: 'Linux', configRaw: '4 core 8GB storage: 100GB', quantity: 1, content: 'Server mới', note: '', storageType: 'diskSanAllFlash', bwQt: 0, bwInternal: 0 }] })} className="bg-indigo-600 text-white px-6 py-2 rounded-xl text-xs font-bold transition-all shadow-lg hover:bg-indigo-500">+ Thêm VM</button>
+                 <h3 className="font-black text-2xl tracking-tight text-slate-800">Hạ tầng Cloud</h3>
+                 <button onClick={() => updateProject({ servers: [...currentProject.servers, { id: 's'+Date.now(), category: Category.AppServer, os: 'Linux', configRaw: '4 core 8GB storage: 100GB', quantity: 1, content: 'Server mới', note: '', storageType: 'diskSanAllFlash', bwQt: 0, bwInternal: 0 }] })} className="bg-indigo-600 text-white px-6 py-2 rounded-xl text-xs font-bold transition-all shadow-lg">+ Thêm VM</button>
                </div>
                <div className="bg-white rounded-[32px] border border-slate-200 shadow-xl overflow-hidden">
                 <table className="w-full text-left">
                   <thead className="bg-slate-50 text-[10px] font-black uppercase text-slate-400 border-b">
-                    <tr><th className="px-6 py-4">Mô tả dịch vụ</th><th className="px-6 py-4">Cấu hình chi tiết (vCPU, RAM, Disk)</th><th className="px-6 py-4 text-center">Số lượng</th><th className="px-6 py-4 text-right">Giá / Tháng</th><th className="px-6 py-4 w-16"></th></tr>
+                    <tr><th className="px-6 py-4">Mô tả</th><th className="px-6 py-4">Cấu hình</th><th className="px-6 py-4 text-center">SL</th><th className="px-6 py-4 text-right">Giá</th><th className="px-6 py-4 w-16"></th></tr>
                   </thead>
                   <tbody>
                     {currentProject.servers.map(s => {
                       const cost = calculateItemCost(s, currentProject.infraPrices);
                       return (
-                        <tr key={s.id} className="border-b border-slate-50 group hover:bg-slate-50/50 transition-colors">
-                          <td className="px-6 py-4 font-bold text-xs"><input className="bg-transparent w-full outline-none focus:border-b focus:border-indigo-300" value={s.content} onChange={(e) => updateProject({ servers: currentProject.servers.map(item => item.id === s.id ? {...item, content: e.target.value} : item)})} /></td>
-                          <td className="px-6 py-4"><input className="w-full bg-slate-100 p-2 rounded-xl text-xs outline-none focus:ring-1 focus:ring-indigo-300" value={s.configRaw} onChange={(e) => updateProject({ servers: currentProject.servers.map(item => item.id === s.id ? {...item, configRaw: e.target.value} : item)})} /></td>
-                          <td className="px-6 py-4 text-center"><input type="number" className="w-12 text-center bg-slate-100 rounded-lg py-1 text-xs font-bold border border-transparent focus:border-indigo-300 outline-none" value={s.quantity} onChange={(e) => updateProject({ servers: currentProject.servers.map(item => item.id === s.id ? {...item, quantity: parseInt(e.target.value) || 1} : item)})} /></td>
+                        <tr key={s.id} className="border-b border-slate-50 group hover:bg-slate-50/50 transition-all">
+                          <td className="px-6 py-4 font-bold text-xs"><input className="bg-transparent w-full outline-none" value={s.content} onChange={(e) => updateProject({ servers: currentProject.servers.map(item => item.id === s.id ? {...item, content: e.target.value} : item)})} /></td>
+                          <td className="px-6 py-4"><input className="w-full bg-slate-100 p-2 rounded-xl text-xs outline-none" value={s.configRaw} onChange={(e) => updateProject({ servers: currentProject.servers.map(item => item.id === s.id ? {...item, configRaw: e.target.value} : item)})} /></td>
+                          <td className="px-6 py-4 text-center"><input type="number" className="w-12 text-center bg-slate-100 rounded-lg py-1 text-xs font-bold" value={s.quantity} onChange={(e) => updateProject({ servers: currentProject.servers.map(item => item.id === s.id ? {...item, quantity: parseInt(e.target.value) || 1} : item)})} /></td>
                           <td className="px-6 py-4 text-right font-black text-indigo-600 text-sm">{formatCurrency(cost.totalPrice)}</td>
                           <td className="px-6 py-4 text-right"><button onClick={() => updateProject({ servers: currentProject.servers.filter(item => item.id !== s.id)})} className="text-red-400 opacity-0 group-hover:opacity-100 font-bold transition-all hover:scale-125">×</button></td>
                         </tr>
                       );
                     })}
-                    {currentProject.servers.length === 0 && <tr><td colSpan={5} className="px-6 py-20 text-center text-xs text-slate-400 italic">Dữ liệu hạ tầng đang trống.</td></tr>}
                   </tbody>
                 </table>
               </div>
@@ -603,27 +724,16 @@ const App: React.FC = () => {
           {activeTab === 'settings' && (
             <div className="space-y-8 animate-in fade-in duration-500 pb-20">
                <div className="bg-white p-10 rounded-[40px] border border-slate-200 shadow-xl">
-                 <h3 className="text-2xl font-black mb-8 text-slate-800">Tham số Dự toán (Unit Price)</h3>
+                 <h3 className="text-2xl font-black mb-8 text-slate-800">Unit Prices</h3>
                  <div className="grid grid-cols-1 md:grid-cols-2 gap-12">
                    <div className="space-y-6">
-                     <div className="flex items-center gap-3 mb-4">
-                        <div className="w-8 h-8 rounded-full bg-indigo-50 flex items-center justify-center text-indigo-500">
-                           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" /></svg>
-                        </div>
-                        <p className="text-xs font-black text-indigo-600 uppercase tracking-widest">Hạ tầng Cloud</p>
-                     </div>
-                     <PriceRow label="Đơn giá 1 vCPU / Tháng" value={currentProject.infraPrices.cpu} onChange={(v) => updateProject({ infraPrices: {...currentProject.infraPrices, cpu: v}})} />
-                     <PriceRow label="Đơn giá 1 GB RAM / Tháng" value={currentProject.infraPrices.ram} onChange={(v) => updateProject({ infraPrices: {...currentProject.infraPrices, ram: v}})} />
-                     <PriceRow label="SSD All Flash (1GB/Tháng)" value={currentProject.infraPrices.diskSanAllFlash} onChange={(v) => updateProject({ infraPrices: {...currentProject.infraPrices, diskSanAllFlash: v}})} />
-                     <PriceRow label="Object Storage (1GB/Tháng)" value={currentProject.infraPrices.storageMinio} onChange={(v) => updateProject({ infraPrices: {...currentProject.infraPrices, storageMinio: v}})} />
+                     <p className="text-xs font-black text-indigo-600 uppercase tracking-widest">Cloud Infrastructure</p>
+                     <PriceRow label="vCPU / Month" value={currentProject.infraPrices.cpu} onChange={(v) => updateProject({ infraPrices: {...currentProject.infraPrices, cpu: v}})} />
+                     <PriceRow label="GB RAM / Month" value={currentProject.infraPrices.ram} onChange={(v) => updateProject({ infraPrices: {...currentProject.infraPrices, ram: v}})} />
+                     <PriceRow label="SSD All Flash (1GB)" value={currentProject.infraPrices.diskSanAllFlash} onChange={(v) => updateProject({ infraPrices: {...currentProject.infraPrices, diskSanAllFlash: v}})} />
                    </div>
                    <div className="space-y-6">
-                     <div className="flex items-center gap-3 mb-4">
-                        <div className="w-8 h-8 rounded-full bg-emerald-50 flex items-center justify-center text-emerald-500">
-                           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" /></svg>
-                        </div>
-                        <p className="text-xs font-black text-emerald-600 uppercase tracking-widest">Nhân sự (Rate/Manday)</p>
-                     </div>
+                     <p className="text-xs font-black text-emerald-600 uppercase tracking-widest">Labor Rates (Daily)</p>
                      {Object.values(Role).map(r => (
                        <PriceRow key={r} label={r} value={currentProject.laborPrices[r] || 0} onChange={(v) => updateProject({ laborPrices: {...currentProject.laborPrices, [r]: v}})} unit="VNĐ" />
                      ))}
@@ -637,16 +747,16 @@ const App: React.FC = () => {
         <footer className="h-20 bg-[#0F172A] text-white px-8 flex items-center justify-between shrink-0 shadow-2xl relative z-20">
           <div className="flex gap-10">
             <div>
-              <p className="text-[8px] text-slate-500 font-bold uppercase tracking-widest mb-0.5">Tổng khối lượng</p>
-              <p className="text-xl font-black">{((currentProject.labors.reduce((s,l)=>s+l.mandays,0)) + autoLaborStats.pm + autoLaborStats.ba + autoLaborStats.tester).toFixed(1)} MD</p>
+              <p className="text-[8px] text-slate-500 font-bold uppercase tracking-widest mb-0.5">Tổng MD</p>
+              <p className="text-xl font-black">{((currentProject.labors.reduce((s,l)=>s+l.mandays,0)) + autoLaborStats.pm + autoLaborStats.ba + autoLaborStats.tester).toFixed(1)}</p>
             </div>
             <div className="hidden md:block border-l border-slate-800 pl-10">
-              <p className="text-[8px] text-slate-500 font-bold uppercase tracking-widest mb-0.5">Thời gian thực hiện</p>
-              <p className="text-sm font-bold text-indigo-400">{currentProject.startDate ? new Date(currentProject.startDate).toLocaleDateString('vi-VN') : '??'} → {currentProject.endDate ? new Date(currentProject.endDate).toLocaleDateString('vi-VN') : '??'}</p>
+              <p className="text-[8px] text-slate-500 font-bold uppercase tracking-widest mb-0.5">Dự kiến</p>
+              <p className="text-sm font-bold text-indigo-400">{currentProject.startDate ? new Date(currentProject.startDate).toLocaleDateString() : '??'} → {currentProject.endDate ? new Date(currentProject.endDate).toLocaleDateString() : '??'}</p>
             </div>
           </div>
           <div className="text-right">
-            <p className="text-[8px] text-indigo-400 font-bold uppercase tracking-widest mb-0.5">TỔNG CHI PHÍ DỰ TOÁN (TCO)</p>
+            <p className="text-[8px] text-indigo-400 font-bold uppercase mb-0.5 tracking-widest">TỔNG CHI PHÍ DỰ TOÁN (TCO)</p>
             <p className="text-2xl font-black tracking-tight">{formatCurrency(grandTotal)}</p>
           </div>
         </footer>
@@ -655,13 +765,8 @@ const App: React.FC = () => {
         @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
         body { font-family: 'Plus Jakarta Sans', sans-serif; }
         ::-webkit-scrollbar { width: 6px; }
-        ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: #334155; border-radius: 10px; }
-        ::-webkit-scrollbar-thumb:hover { background: #475569; }
-        input[type="date"]::-webkit-calendar-picker-indicator {
-          filter: invert(0.5);
-          cursor: pointer;
-        }
+        input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(0.5); cursor: pointer; }
       `}} />
     </div>
   );

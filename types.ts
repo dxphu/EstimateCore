@@ -14,11 +14,18 @@ export enum Role {
   BA = "Business Analyst"
 }
 
-export interface AuthUser {
-  id: string;
-  name: string;
-  email: string;
-  picture: string;
+export enum TaskStatus {
+  Todo = "Chờ thực hiện",
+  Doing = "Đang làm",
+  Review = "Đang kiểm tra",
+  Done = "Hoàn thành"
+}
+
+export enum Priority {
+  Low = "Thấp",
+  Medium = "Trung bình",
+  High = "Cao",
+  Urgent = "Khẩn cấp"
 }
 
 export interface UnitPrices {
@@ -71,6 +78,10 @@ export interface LaborItem {
   role: Role;
   mandays: number;
   description: string;
+  status: TaskStatus;
+  priority: Priority;
+  assignee: string;
+  dueDate: string;
 }
 
 export interface Project {
@@ -82,11 +93,6 @@ export interface Project {
   laborPrices: LaborPrices;
   createdAt: number;
   lastModified: number;
-}
-
-export interface GlobalSettings {
-  defaultInfraPrices: UnitPrices;
-  defaultLaborPrices: LaborPrices;
 }
 
 export interface ParsedConfig {

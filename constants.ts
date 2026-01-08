@@ -1,29 +1,24 @@
 
-import { ServerItem, Category, UnitPrices, Role, LaborItem, LaborPrices } from './types';
+import { ServerItem, Category, UnitPrices, Role, LaborItem, TaskStatus, Priority } from './types';
 
 export const INITIAL_UNIT_PRICES: UnitPrices = {
-  // Compute (Theo ảnh)
   cpu: 166000,
   ram: 111000,
-  // Disk (Theo ảnh)
   diskSanAllFlash: 754,
   diskSanAllFlashSme: 3683,
   diskVsan: 219,
-  diskSanHdd: 150, // Ước tính vì ảnh trống
-  // Storage (Theo ảnh)
+  diskSanHdd: 150,
   storageMinio: 18839,
   storageSmb3: 754,
   storageNfsVsan: 438,
   storageCeph: 166,
-  // Network (Theo ảnh)
   bandwidthQt: 1850000,
   bandwidthInternal: 40000,
-  // OS
   osWindows: 450000,
   osLinux: 0
 };
 
-export const INITIAL_LABOR_PRICES: LaborPrices = {
+export const INITIAL_LABOR_PRICES: { [key: string]: number } = {
   [Role.PM]: 2500000,
   [Role.BA]: 2000000,
   [Role.SeniorDev]: 2200000,
@@ -44,18 +39,6 @@ export const INITIAL_SERVERS: ServerItem[] = [
     storageType: 'diskSanAllFlash',
     bwQt: 0,
     bwInternal: 10
-  },
-  {
-    id: 's2',
-    category: Category.DbServer,
-    os: 'Centos7 (64 bit)',
-    configRaw: 'CPU: 16 core; RAM 64GB; storage: 500GB',
-    quantity: 2,
-    content: 'Database Production Cluster',
-    note: '',
-    storageType: 'diskSanAllFlashSme',
-    bwQt: 0,
-    bwInternal: 20
   }
 ];
 
@@ -65,13 +48,21 @@ export const INITIAL_LABOR_ITEMS: LaborItem[] = [
     taskName: 'Phân tích nghiệp vụ (BA)',
     role: Role.BA,
     mandays: 10,
-    description: 'Xác định yêu cầu chức năng'
+    description: 'Xác định yêu cầu chức năng',
+    status: TaskStatus.Done,
+    priority: Priority.High,
+    assignee: 'Nguyễn Văn A',
+    dueDate: new Date().toISOString().split('T')[0]
   },
   {
     id: 'l2',
-    taskName: 'Quản lý dự án (PM)',
-    role: Role.PM,
+    taskName: 'Thiết kế Database',
+    role: Role.SeniorDev,
     mandays: 5,
-    description: 'Điều phối nhân sự'
+    description: 'Thiết kế schema cho dự án',
+    status: TaskStatus.Doing,
+    priority: Priority.Urgent,
+    assignee: 'Trần Thị B',
+    dueDate: new Date().toISOString().split('T')[0]
   }
 ];
